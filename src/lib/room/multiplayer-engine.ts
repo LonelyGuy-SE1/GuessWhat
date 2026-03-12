@@ -10,37 +10,75 @@ import {
   isGameOver,
   getLeaderboard,
 } from "@/lib/game/engine";
-import { getSession } from "@/lib/game/session-store";
 import { generateGameDataset } from "@/lib/ai/orchestrator";
-import { broadcastToRoom } from "@/lib/room/sse-hub";
 import { serializeRoom } from "@/lib/utils";
 import { deleteRoomApiKey } from "@/lib/room/api-key-store";
 
 const g = global as typeof globalThis & {
-  __guesswhat_hintTimers?: Map<string, NodeJS.Timeout>;
-  __guesswhat_roundTimers?: Map<string, NodeJS.Timeout>;
+  __guesswhat_hintTimers?: Map<string, ReturnType<typeof setInterval>>;
+  __guesswhat_roundTimers?: Map<string, ReturnType<typeof setTimeout>>;
+  __guesswhat_sessions?: Map<string, import("@/lib/types").GameSession>;
+  __guesswhat_events?: Map<string, WSServerMessage[]>;
 };
 if (!g.__guesswhat_hintTimers) g.__guesswhat_hintTimers = new Map();
 if (!g.__guesswhat_roundTimers) g.__guesswhat_roundTimers = new Map();
+if (!g.__guesswhat_sessions) g.__guesswhat_sessions = new Map();
+if (!g.__guesswhat_events) g.__guesswhat_events = new Map();
 const hintTimers = g.__guesswhat_hintTimers;
 const roundTimers = g.__guesswhat_roundTimers;
+const sessions = g.__guesswhat_sessions;
+const eventQueues = g.__guesswhat_events;
 
-function serializeRoundForClients(sessionId: string) {
-  const session = getSession(sessionId);
-  if (!session?.roundState) return null;
-  const rs = session.roundState;
-  const revealedHints: string[] = [];
-  for (let i = 0; i < rs.revealedHints; i++) {
-    revealedHints.push(rs.entity.hints[i]);
+function getSessionLocal(sessionId: string) {
+  return sessions.get(sessionId);
+}
+
+export function pushEvent(roomId: string, msg: WSServerMessage) {
+  if (!eventQueues.has(roomId)) {
+    eventQueues.set(roomId, []);
   }
-  return {
-    roundNumber: rs.roundNumber,
-    imageUrl: rs.entity.imageUrl,
-    startedAt: rs.startedAt,
-    timerSeconds: rs.timerSeconds,
-    revealedHints: rs.revealedHints,
-    hints: revealedHints,
-  };
+  const queue = eventQueues.get(roomId)!;
+  queue.push(msg);
+  if (queue.length > 100) {
+    queue.splice(0, queue.length - 100);
+  }
+}
+
+export function getEvents(roomId: string, since: number): { events: WSServerMessage[]; cursor: number } {
+  const queue = eventQueues.get(roomId);
+  if (!queue || since >= queue.length) {
+    return { events: [], cursor: queue?.length ?? 0 };
+  }
+  return { events: queue.slice(since), cursor: queue.length };
+}
+
+export function getRoomState(roomId: string) {
+  const room = getRoom(roomId);
+  if (!room) return null;
+
+  const serialized = serializeRoom(room);
+  let roundState = null;
+
+  if (room.sessionId) {
+    const session = getSessionLocal(room.sessionId);
+    if (session?.roundState) {
+      const rs = session.roundState;
+      const revealedHints: string[] = [];
+      for (let i = 0; i < rs.revealedHints; i++) {
+        revealedHints.push(rs.entity.hints[i]);
+      }
+      roundState = {
+        roundNumber: rs.roundNumber,
+        imageUrl: rs.entity.imageUrl,
+        startedAt: rs.startedAt,
+        timerSeconds: rs.timerSeconds,
+        revealedHints: rs.revealedHints,
+        hints: revealedHints,
+      };
+    }
+  }
+
+  return { room: serialized, roundState, currentRound: 0, totalRounds: 0 };
 }
 
 function clearTimers(sessionId: string) {
@@ -67,9 +105,11 @@ function scheduleHints(roomId: string, sessionId: string, timerSeconds: number) 
       return;
     }
 
-    const result = revealHint(sessionId);
+    const session = getSessionLocal(sessionId);
+    if (!session) return;
+    const result = revealHint(session);
     if (result) {
-      broadcastToRoom(roomId, {
+      pushEvent(roomId, {
         type: "hint_revealed",
         hintIndex: result.hintIndex,
         hint: result.hint,
@@ -92,47 +132,59 @@ function scheduleRoundEnd(roomId: string, sessionId: string, timerSeconds: numbe
 function handleRoundEnd(roomId: string, sessionId: string) {
   clearTimers(sessionId);
 
-  const result = endRound(sessionId);
+  const session = getSessionLocal(sessionId);
+  if (!session) return;
+
+  const result = endRound(session);
   if (!result) return;
 
-  broadcastToRoom(roomId, {
+  pushEvent(roomId, {
     type: "round_end",
     scores: result.scores,
     correctAnswer: result.correctAnswer,
     description: result.description,
   });
 
-  if (isGameOver(sessionId)) {
-    const finalScores = getLeaderboard(sessionId);
-    broadcastToRoom(roomId, { type: "game_end", finalScores });
+  if (isGameOver(session)) {
+    const finalScores = getLeaderboard(session);
+    pushEvent(roomId, { type: "game_end", finalScores });
     setRoomStatus(roomId, "finished");
     deleteRoomApiKey(roomId);
   }
 }
 
 export function startRound(roomId: string, sessionId: string) {
-  const session = getSession(sessionId);
+  const session = getSessionLocal(sessionId);
   if (!session) return;
   const room = getRoom(roomId);
   if (!room) return;
 
-  const roundState = startNextRound(sessionId, room.timerSeconds);
+  const roundState = startNextRound(session, room.timerSeconds);
   if (!roundState) {
-    const finalScores = getLeaderboard(sessionId);
-    broadcastToRoom(roomId, { type: "game_end", finalScores });
+    const finalScores = getLeaderboard(session);
+    pushEvent(roomId, { type: "game_end", finalScores });
     setRoomStatus(roomId, "finished");
     return;
   }
 
-  const serialized = serializeRoundForClients(sessionId);
-  if (serialized) {
-    broadcastToRoom(roomId, {
-      type: "round_start",
-      round: serialized,
-      roundNumber: session.currentRound,
-      totalRounds: session.totalRounds,
-    });
+  const revealedHints: string[] = [];
+  for (let i = 0; i < roundState.revealedHints; i++) {
+    revealedHints.push(roundState.entity.hints[i]);
   }
+
+  pushEvent(roomId, {
+    type: "round_start",
+    round: {
+      roundNumber: roundState.roundNumber,
+      imageUrl: roundState.entity.imageUrl,
+      startedAt: roundState.startedAt,
+      timerSeconds: roundState.timerSeconds,
+      revealedHints: roundState.revealedHints,
+      hints: revealedHints,
+    },
+    roundNumber: session.currentRound,
+    totalRounds: session.totalRounds,
+  });
 
   scheduleHints(roomId, sessionId, room.timerSeconds);
   scheduleRoundEnd(roomId, sessionId, room.timerSeconds);
@@ -141,13 +193,12 @@ export function startRound(roomId: string, sessionId: string) {
 export async function startGame(roomId: string, apiKey: string) {
   const room = getRoom(roomId);
   if (!room) {
-    const msg: WSServerMessage = { type: "error", message: "Room not found" };
-    broadcastToRoom(roomId, msg);
+    pushEvent(roomId, { type: "error", message: "Room not found" });
     return;
   }
 
   setRoomStatus(roomId, "generating");
-  broadcastToRoom(roomId, { type: "room_state", room: serializeRoom(room) });
+  pushEvent(roomId, { type: "room_state", room: serializeRoom(room) });
 
   try {
     const dataset = await generateGameDataset(apiKey, room.topic, room.difficulty, room.totalRounds);
@@ -163,15 +214,16 @@ export async function startGame(roomId: string, apiKey: string) {
       session.players.set(id, { ...player, score: 0 });
     }
 
+    sessions.set(session.id, session);
     setRoomSession(roomId, session.id);
     setRoomStatus(roomId, "playing");
 
-    broadcastToRoom(roomId, { type: "game_started", sessionId: session.id });
+    pushEvent(roomId, { type: "game_started", sessionId: session.id });
     startRound(roomId, session.id);
   } catch (err: unknown) {
     setRoomStatus(roomId, "lobby");
     const message = err instanceof Error ? err.message : "Failed to generate game";
-    broadcastToRoom(roomId, { type: "error", message });
+    pushEvent(roomId, { type: "error", message });
   }
 }
 
@@ -179,17 +231,20 @@ export function handleGuess(roomId: string, playerId: string, guess: string) {
   const room = getRoom(roomId);
   if (!room?.sessionId) return;
 
-  const result = processGuess(room.sessionId, playerId, guess);
+  const session = getSessionLocal(room.sessionId);
+  if (!session) return;
+
+  const result = processGuess(session, playerId, guess);
   if (!result) return;
 
-  broadcastToRoom(roomId, {
+  pushEvent(roomId, {
     type: "guess_result",
     playerId,
     correct: result.correct,
     guessesLeft: result.guessesLeft,
   });
 
-  if (isRoundOver(room.sessionId)) {
+  if (isRoundOver(session)) {
     handleRoundEnd(roomId, room.sessionId);
   }
 }

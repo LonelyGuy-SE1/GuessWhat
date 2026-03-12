@@ -31,7 +31,6 @@ export default function RoomPage() {
   const [isHost, setIsHost] = useState(false);
   const [connected, setConnected] = useState(false);
 
-  // Game state
   const [roundData, setRoundData] = useState<SerializedRoundState | null>(null);
   const [roundNumber, setRoundNumber] = useState(0);
   const [totalRounds, setTotalRounds] = useState(0);
@@ -47,6 +46,8 @@ export default function RoomPage() {
   const [error, setError] = useState<string | null>(null);
 
   const startedAtRef = useRef(Date.now());
+  const cursorRef = useRef(0);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const handleEvent = useCallback(
     (msg: WSServerMessage) => {
@@ -126,17 +127,15 @@ export default function RoomPage() {
 
         case "error":
           setError(msg.message);
-          if (phase === "generating") setPhase("lobby");
           break;
 
         case "pong":
           break;
       }
     },
-    [playerId, phase],
+    [playerId],
   );
 
-  // Load session data
   useEffect(() => {
     const stored = sessionStorage.getItem(`room_${roomId}`);
     if (!stored) {
@@ -150,7 +149,6 @@ export default function RoomPage() {
     if (data.playerId) setPlayerId(data.playerId);
   }, [roomId]);
 
-  // Join or re-join room to mark connected
   useEffect(() => {
     if (!playerName) return;
     async function join() {
@@ -174,21 +172,47 @@ export default function RoomPage() {
     join();
   }, [roomId, playerName, playerId]);
 
-  // SSE connection
   useEffect(() => {
-    const es = new EventSource(`/api/room/${roomId}/events`);
-    es.onopen = () => setConnected(true);
-    es.onerror = () => setConnected(false);
-    es.onmessage = (event) => {
+    async function poll() {
       try {
-        const msg: WSServerMessage = JSON.parse(event.data);
-        handleEvent(msg);
+        const res = await fetch(`/api/room/${roomId}/events?cursor=${cursorRef.current}`);
+        if (!res.ok) {
+          setConnected(false);
+          return;
+        }
+        setConnected(true);
+        const data = await res.json();
+
+        if (data.room) {
+          setRoom(data.room);
+          if (phase === "connecting") {
+            if (data.room.status === "lobby") setPhase("lobby");
+            else if (data.room.status === "generating") setPhase("generating");
+            else if (data.room.status === "playing") setPhase("playing");
+          }
+        }
+
+        if (data.events && data.events.length > 0) {
+          for (const event of data.events) {
+            handleEvent(event);
+          }
+        }
+
+        if (data.cursor !== undefined) {
+          cursorRef.current = data.cursor;
+        }
       } catch {
-        // ignore
+        setConnected(false);
       }
+    }
+
+    poll();
+    pollingRef.current = setInterval(poll, 1500);
+
+    return () => {
+      if (pollingRef.current) clearInterval(pollingRef.current);
     };
-    return () => es.close();
-  }, [roomId, handleEvent]);
+  }, [roomId, handleEvent, phase]);
 
   function postAction(action: string, payload?: Record<string, unknown>) {
     return fetch(`/api/room/${roomId}/action`, {
@@ -246,7 +270,7 @@ export default function RoomPage() {
         )}
         {!connected && (
           <div className="px-4 py-3 border-2 border-dashed border-amber-300 rounded-xl bg-amber-50 text-sm text-amber-700">
-            Multiplayer link unstable. Keep this tab open.
+            Reconnecting...
           </div>
         )}
         <Lobby

@@ -1,10 +1,23 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import type { GameSession, GameDataset, Difficulty } from "@/lib/types";
+import {
+  createGameSession,
+  startNextRound,
+  processGuess,
+  endRound,
+  revealHint,
+  isRoundOver,
+  isGameOver,
+  getLeaderboard,
+} from "@/lib/game/engine";
 
 interface UseSoloGameOptions {
-  sessionId: string;
-  playerId: string;
+  dataset: GameDataset;
+  playerName: string;
+  difficulty: Difficulty;
+  rounds: number;
 }
 
 interface RoundData {
@@ -14,18 +27,6 @@ interface RoundData {
   totalRounds: number;
 }
 
-interface HintData {
-  hintIndex: number;
-  hint: string;
-}
-
-interface GuessResult {
-  correct: boolean;
-  guessesLeft: number;
-  score: number;
-  roundOver: boolean;
-}
-
 interface RoundEndData {
   scores: { playerId: string; playerName: string; score: number; roundScore: number }[];
   correctAnswer: string;
@@ -33,136 +34,130 @@ interface RoundEndData {
   gameOver: boolean;
 }
 
-export function useSoloGame({ sessionId, playerId }: UseSoloGameOptions) {
+const TIMER_MAP: Record<Difficulty, number> = { easy: 45, medium: 30, hard: 20 };
+
+export function useSoloGame({ dataset, playerName, difficulty, rounds }: UseSoloGameOptions) {
+  const sessionRef = useRef<GameSession | null>(null);
+  const playerIdRef = useRef<string>("");
   const [round, setRound] = useState<RoundData | null>(null);
   const [hints, setHints] = useState<string[]>([]);
   const [guessesLeft, setGuessesLeft] = useState(3);
   const [score, setScore] = useState(0);
   const [roundEnd, setRoundEnd] = useState<RoundEndData | null>(null);
   const [gameOver, setGameOver] = useState(false);
-  const [finalScores, setFinalScores] = useState<RoundEndData["scores"] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<"idle" | "playing" | "round_end" | "game_over">("idle");
+  const [previousGuesses, setPreviousGuesses] = useState<{ guess: string; correct: boolean }[]>([]);
 
-  // Hint auto-reveal timer
-  const hintTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const hintTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const apiCall = useCallback(
-    async (action: string, extra?: Record<string, unknown>) => {
-      const res = await fetch(`/api/game/${sessionId}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action, playerId, ...extra }),
-      });
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "API request failed");
-      }
-      return res.json();
-    },
-    [sessionId, playerId]
-  );
+  useEffect(() => {
+    const session = createGameSession(dataset, "solo", difficulty, rounds, TIMER_MAP[difficulty], playerName);
+    sessionRef.current = session;
+    playerIdRef.current = Array.from(session.players.keys())[0];
+    return () => {
+      if (hintTimerRef.current) clearInterval(hintTimerRef.current);
+    };
+  }, [dataset, playerName, difficulty, rounds]);
 
-  const startRound = useCallback(async () => {
+  const startRound = useCallback(() => {
+    const session = sessionRef.current;
+    if (!session) return;
+
     setLoading(true);
     setError(null);
     setHints([]);
     setGuessesLeft(3);
     setRoundEnd(null);
+    setPreviousGuesses([]);
 
-    try {
-      const data = await apiCall("start_round");
-      if (data.action === "game_over") {
+    if (hintTimerRef.current) clearInterval(hintTimerRef.current);
+
+    const timerSeconds = TIMER_MAP[difficulty];
+    const roundState = startNextRound(session, timerSeconds);
+
+    if (!roundState) {
+      if (isGameOver(session)) {
         setGameOver(true);
-        setFinalScores(data.finalScores);
         setPhase("game_over");
-      } else {
-        setRound({
-          roundNumber: data.roundNumber,
-          imageUrl: data.imageUrl,
-          timerSeconds: data.timerSeconds,
-          totalRounds: data.totalRounds,
-        });
-        setPhase("playing");
-
-        // Schedule hint reveals
-        const interval = (data.timerSeconds * 1000) / 3;
-        let count = 0;
-        hintTimerRef.current = setInterval(async () => {
-          count++;
-          if (count > 2) {
-            if (hintTimerRef.current) clearInterval(hintTimerRef.current);
-            return;
-          }
-          try {
-            const hintData: HintData = await apiCall("reveal_hint");
-            setHints((prev) => [...prev, hintData.hint]);
-          } catch {
-            // ignore
-          }
-        }, interval);
       }
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Failed to start round");
-    } finally {
       setLoading(false);
+      return;
     }
-  }, [apiCall]);
+
+    setRound({
+      roundNumber: roundState.roundNumber,
+      imageUrl: roundState.entity.imageUrl,
+      timerSeconds: roundState.timerSeconds,
+      totalRounds: session.totalRounds,
+    });
+    setPhase("playing");
+    setLoading(false);
+
+    const interval = (timerSeconds * 1000) / 3;
+    let count = 0;
+    hintTimerRef.current = setInterval(() => {
+      count++;
+      if (count > 2) {
+        if (hintTimerRef.current) clearInterval(hintTimerRef.current);
+        return;
+      }
+      const result = revealHint(session);
+      if (result) {
+        setHints((prev) => [...prev, result.hint]);
+      }
+    }, interval);
+  }, [difficulty]);
 
   const submitGuess = useCallback(
-    async (guess: string) => {
+    (guess: string) => {
       if (!guess.trim()) return;
+      const session = sessionRef.current;
+      if (!session) return;
+
       setError(null);
 
-      try {
-        const result: GuessResult = await apiCall("guess", { guess });
-        setGuessesLeft(result.guessesLeft);
+      const result = processGuess(session, playerIdRef.current, guess);
+      if (!result) return;
 
-        if (result.correct) {
-          setScore((prev) => prev + result.score);
-        }
+      setGuessesLeft(result.guessesLeft);
+      setPreviousGuesses((prev) => [...prev, { guess, correct: result.correct }]);
 
-        if (result.roundOver || result.correct || result.guessesLeft === 0) {
-          if (hintTimerRef.current) clearInterval(hintTimerRef.current);
-          const endData: RoundEndData = await apiCall("end_round");
-          setRoundEnd(endData);
+      if (result.correct) {
+        setScore((prev) => prev + result.score);
+      }
+
+      if (result.correct || result.guessesLeft === 0 || isRoundOver(session)) {
+        if (hintTimerRef.current) clearInterval(hintTimerRef.current);
+        const endData = endRound(session);
+        if (endData) {
+          const over = isGameOver(session);
+          setRoundEnd({ ...endData, gameOver: over });
           setPhase("round_end");
-
-          if (endData.gameOver) {
+          if (over) {
             setGameOver(true);
-            setFinalScores(endData.scores);
           }
         }
-
-        return result;
-      } catch (err: unknown) {
-        setError(err instanceof Error ? err.message : "Failed to submit guess");
-        return null;
       }
     },
-    [apiCall]
+    []
   );
 
-  const forceEndRound = useCallback(async () => {
+  const forceEndRound = useCallback(() => {
     if (hintTimerRef.current) clearInterval(hintTimerRef.current);
-    try {
-      const endData: RoundEndData = await apiCall("end_round");
-      setRoundEnd(endData);
-      setPhase("round_end");
-      if (endData.gameOver) {
-        setGameOver(true);
-        setFinalScores(endData.scores);
-      }
-    } catch {
-      // ignore
-    }
-  }, [apiCall]);
+    const session = sessionRef.current;
+    if (!session) return;
 
-  useEffect(() => {
-    return () => {
-      if (hintTimerRef.current) clearInterval(hintTimerRef.current);
-    };
+    const endData = endRound(session);
+    if (endData) {
+      const over = isGameOver(session);
+      setRoundEnd({ ...endData, gameOver: over });
+      setPhase("round_end");
+      if (over) {
+        setGameOver(true);
+      }
+    }
   }, []);
 
   return {
@@ -172,10 +167,10 @@ export function useSoloGame({ sessionId, playerId }: UseSoloGameOptions) {
     score,
     roundEnd,
     gameOver,
-    finalScores,
     loading,
     error,
     phase,
+    previousGuesses,
     startRound,
     submitGuess,
     forceEndRound,

@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRoom, joinRoom } from "@/lib/room/manager";
 import { serializeRoom } from "@/lib/utils";
 import { getRoomApiKey } from "@/lib/room/api-key-store";
-import { broadcastToRoom } from "@/lib/room/sse-hub";
-import { startGame, handleGuess, nextRound } from "@/lib/room/multiplayer-engine";
+import { startGame, handleGuess, nextRound, pushEvent } from "@/lib/room/multiplayer-engine";
 
 export async function POST(
   req: NextRequest,
@@ -29,8 +28,7 @@ export async function POST(
         const existing = room.players.get(playerId);
         if (existing) {
           existing.connected = true;
-          const payload = { type: "room_state", room: serializeRoom(room) } as const;
-          broadcastToRoom(roomId, payload);
+          pushEvent(roomId, { type: "room_state", room: serializeRoom(room) });
           return NextResponse.json({ playerId: existing.id, room: serializeRoom(room) });
         }
       }
@@ -44,7 +42,7 @@ export async function POST(
         return NextResponse.json({ error: "Cannot join room" }, { status: 400 });
       }
 
-      broadcastToRoom(roomId, {
+      pushEvent(roomId, {
         type: "player_joined",
         player: {
           id: result.player.id,
@@ -54,7 +52,7 @@ export async function POST(
         },
       });
 
-      broadcastToRoom(roomId, { type: "room_state", room: serializeRoom(result.room) });
+      pushEvent(roomId, { type: "room_state", room: serializeRoom(result.room) });
 
       return NextResponse.json({ playerId: result.player.id, room: serializeRoom(result.room) });
     }

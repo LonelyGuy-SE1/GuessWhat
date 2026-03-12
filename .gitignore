@@ -53,3 +53,5 @@ yarn-error.log*
 
 # Generated
 next-env.d.ts
+
+.vercel

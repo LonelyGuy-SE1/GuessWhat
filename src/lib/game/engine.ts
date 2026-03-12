@@ -8,7 +8,6 @@ import type {
   Difficulty,
 } from "@/lib/types";
 import { generateId, calculateRoundScore, checkGuess } from "@/lib/utils";
-import { getSession, setSession } from "./session-store";
 
 export function createGameSession(
   dataset: GameDataset,
@@ -36,7 +35,6 @@ export function createGameSession(
     session.players.set(player.id, player);
   }
 
-  setSession(session);
   return session;
 }
 
@@ -49,13 +47,9 @@ export function createPlayer(name: string): Player {
   };
 }
 
-export function startNextRound(sessionId: string, timerSeconds: number): RoundState | null {
-  const session = getSession(sessionId);
-  if (!session) return null;
-
+export function startNextRound(session: GameSession, timerSeconds: number): RoundState | null {
   if (session.currentRound >= session.totalRounds) {
     session.status = "finished";
-    setSession(session);
     return null;
   }
 
@@ -71,7 +65,6 @@ export function startNextRound(sessionId: string, timerSeconds: number): RoundSt
     guesses: new Map(),
   };
 
-  // Initialize player round state
   for (const [playerId] of session.players) {
     roundState.guesses.set(playerId, {
       guessesUsed: 0,
@@ -83,38 +76,33 @@ export function startNextRound(sessionId: string, timerSeconds: number): RoundSt
   session.roundState = roundState;
   session.status = "playing";
   session.currentRound++;
-  setSession(session);
 
   return roundState;
 }
 
-export function revealHint(sessionId: string): { hintIndex: number; hint: string } | null {
-  const session = getSession(sessionId);
-  if (!session?.roundState) return null;
+export function revealHint(session: GameSession): { hintIndex: number; hint: string } | null {
+  if (!session.roundState) return null;
 
   const rs = session.roundState;
   if (rs.revealedHints >= 3) return null;
 
   const hintIndex = rs.revealedHints;
   rs.revealedHints++;
-  setSession(session);
 
   return { hintIndex, hint: rs.entity.hints[hintIndex] };
 }
 
 export function processGuess(
-  sessionId: string,
+  session: GameSession,
   playerId: string,
   guess: string
 ): { correct: boolean; guessesLeft: number; score: number } | null {
-  const session = getSession(sessionId);
-  if (!session?.roundState) return null;
+  if (!session.roundState) return null;
 
   const rs = session.roundState;
   const playerState = rs.guesses.get(playerId);
   if (!playerState) return null;
 
-  // Player already got it right or used all guesses
   if (playerState.guessedCorrectly || playerState.guessesUsed >= 3) {
     return { correct: playerState.guessedCorrectly, guessesLeft: 0, score: playerState.score };
   }
@@ -133,14 +121,11 @@ export function processGuess(
       timeRemPct
     );
 
-    // Update player total score
     const player = session.players.get(playerId);
     if (player) {
       player.score += playerState.score;
     }
   }
-
-  setSession(session);
 
   return {
     correct,
@@ -149,13 +134,12 @@ export function processGuess(
   };
 }
 
-export function endRound(sessionId: string): {
+export function endRound(session: GameSession): {
   scores: PlayerScore[];
   correctAnswer: string;
   description: string;
 } | null {
-  const session = getSession(sessionId);
-  if (!session?.roundState) return null;
+  if (!session.roundState) return null;
 
   const rs = session.roundState;
   const scores: PlayerScore[] = [];
@@ -174,7 +158,6 @@ export function endRound(sessionId: string): {
 
   scores.sort((a, b) => b.score - a.score);
   session.roundState = null;
-  setSession(session);
 
   return {
     scores,
@@ -183,10 +166,7 @@ export function endRound(sessionId: string): {
   };
 }
 
-export function getLeaderboard(sessionId: string): PlayerScore[] {
-  const session = getSession(sessionId);
-  if (!session) return [];
-
+export function getLeaderboard(session: GameSession): PlayerScore[] {
   const scores: PlayerScore[] = [];
   for (const [, player] of session.players) {
     scores.push({
@@ -200,13 +180,11 @@ export function getLeaderboard(sessionId: string): PlayerScore[] {
   return scores.sort((a, b) => b.score - a.score);
 }
 
-export function isRoundOver(sessionId: string): boolean {
-  const session = getSession(sessionId);
-  if (!session?.roundState) return true;
+export function isRoundOver(session: GameSession): boolean {
+  if (!session.roundState) return true;
 
   const rs = session.roundState;
 
-  // Check if all players have guessed or run out of guesses
   let allDone = true;
   for (const [, state] of rs.guesses) {
     if (!state.guessedCorrectly && state.guessesUsed < 3) {
@@ -217,13 +195,10 @@ export function isRoundOver(sessionId: string): boolean {
 
   if (allDone) return true;
 
-  // Check if timer expired
   const elapsed = (Date.now() - rs.startedAt) / 1000;
   return elapsed >= rs.timerSeconds;
 }
 
-export function isGameOver(sessionId: string): boolean {
-  const session = getSession(sessionId);
-  if (!session) return true;
+export function isGameOver(session: GameSession): boolean {
   return session.currentRound >= session.totalRounds && !session.roundState;
 }

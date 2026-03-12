@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import type { Difficulty } from "@/lib/types";
+import type { Difficulty, GameDataset } from "@/lib/types";
+import { generateGameDataset, type GenerationProgress } from "@/lib/ai/orchestrator";
 import ApiKeyInput from "@/components/ApiKeyInput";
 import PromptInput from "@/components/PromptInput";
 import ProgressBar from "@/components/ProgressBar";
@@ -9,12 +10,6 @@ import GameScreen from "@/components/GameScreen";
 import { useSoloGame } from "@/hooks/useSoloGame";
 
 type Phase = "setup" | "generating" | "playing";
-
-interface SessionInfo {
-  sessionId: string;
-  playerId: string;
-  totalRounds: number;
-}
 
 interface Progress {
   phase: "entities" | "processing" | "ready";
@@ -31,18 +26,18 @@ export default function SoloPage() {
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
   const [rounds, setRounds] = useState(5);
   const [error, setError] = useState<string | null>(null);
-  const [sessionInfo, setSessionInfo] = useState<SessionInfo | null>(null);
+  const [dataset, setDataset] = useState<GameDataset | null>(null);
   const [progress, setProgress] = useState<Progress>({
     phase: "entities",
     current: 0,
     total: 0,
     message: "Starting...",
   });
-  const abortRef = useRef<AbortController | null>(null);
+  const abortedRef = useRef(false);
 
   useEffect(() => {
     return () => {
-      abortRef.current?.abort();
+      abortedRef.current = true;
     };
   }, []);
 
@@ -52,6 +47,7 @@ export default function SoloPage() {
 
     setPhase("generating");
     setError(null);
+    abortedRef.current = false;
     setProgress({
       phase: "entities",
       current: 0,
@@ -59,66 +55,28 @@ export default function SoloPage() {
       message: "Starting...",
     });
 
-    abortRef.current = new AbortController();
-
     try {
-      const res = await fetch("/api/game/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          apiKey,
-          topic,
-          difficulty,
-          rounds,
-          playerName,
-        }),
-        signal: abortRef.current.signal,
-      });
-
-      if (!res.ok || !res.body) {
-        const text = await res.text();
-        throw new Error(text || "Failed to create game");
-      }
-
-      // Read SSE stream
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n\n");
-        buffer = lines.pop() || "";
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            const data = JSON.parse(line.slice(6));
-
-            if (data.type === "progress") {
-              setProgress({
-                phase: data.phase,
-                current: data.entitiesReady,
-                total: data.entitiesTotal || rounds,
-                message: data.message,
-              });
-            } else if (data.type === "complete") {
-              setSessionInfo({
-                sessionId: data.sessionId,
-                playerId: data.playerId,
-                totalRounds: data.totalRounds,
-              });
-              setPhase("playing");
-            } else if (data.type === "error") {
-              throw new Error(data.error);
-            }
-          }
+      const result = await generateGameDataset(
+        apiKey,
+        topic,
+        difficulty,
+        rounds,
+        (p: GenerationProgress) => {
+          if (abortedRef.current) return;
+          setProgress({
+            phase: p.phase,
+            current: p.entitiesReady,
+            total: p.entitiesTotal || rounds,
+            message: p.message,
+          });
         }
-      }
+      );
+
+      if (abortedRef.current) return;
+      setDataset(result);
+      setPhase("playing");
     } catch (err: unknown) {
-      if (err instanceof Error && err.name === "AbortError") return;
+      if (abortedRef.current) return;
       setError(err instanceof Error ? err.message : "Something went wrong");
       setPhase("setup");
     }
@@ -219,29 +177,28 @@ export default function SoloPage() {
     );
   }
 
-  // Playing phase
-  if (!sessionInfo) return null;
+  if (!dataset) return null;
 
   return (
     <SoloGamePlay
-      sessionId={sessionInfo.sessionId}
-      playerId={sessionInfo.playerId}
-      totalRounds={sessionInfo.totalRounds}
+      dataset={dataset}
       playerName={playerName}
+      difficulty={difficulty}
+      rounds={rounds}
     />
   );
 }
 
 function SoloGamePlay({
-  sessionId,
-  playerId,
-  totalRounds,
+  dataset,
   playerName,
+  difficulty,
+  rounds,
 }: {
-  sessionId: string;
-  playerId: string;
-  totalRounds: number;
+  dataset: GameDataset;
   playerName: string;
+  difficulty: Difficulty;
+  rounds: number;
 }) {
   const {
     round,
@@ -253,12 +210,12 @@ function SoloGamePlay({
     loading,
     error,
     phase,
+    previousGuesses,
     startRound,
     submitGuess,
     forceEndRound,
-  } = useSoloGame({ sessionId, playerId });
+  } = useSoloGame({ dataset, playerName, difficulty, rounds });
 
-  // Start first round on mount
   if (phase === "idle" && !loading) {
     startRound();
   }
@@ -288,13 +245,14 @@ function SoloGamePlay({
 
   if (!round) return null;
 
+  const playerId = "solo";
   const scores = [
     {
       playerId,
       playerName,
       score,
       roundScore:
-        roundEnd?.scores.find((s) => s.playerId === playerId)?.roundScore ?? 0,
+        roundEnd?.scores.find((s) => s.playerName === playerName)?.roundScore ?? 0,
     },
   ];
 
@@ -316,6 +274,7 @@ function SoloGamePlay({
       roundResult={roundEnd}
       onNextRound={startRound}
       gameOver={gameOver}
+      previousGuesses={previousGuesses}
     />
   );
 }
