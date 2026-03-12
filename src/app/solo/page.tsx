@@ -209,16 +209,12 @@ function SoloGamePlay({
     gameOver,
     loading,
     error,
-    phase,
     previousGuesses,
+    playerId,
     startRound,
     submitGuess,
     forceEndRound,
   } = useSoloGame({ dataset, playerName, difficulty, rounds });
-
-  if (phase === "idle" && !loading) {
-    startRound();
-  }
 
   if (loading && !round) {
     return (
@@ -245,7 +241,6 @@ function SoloGamePlay({
 
   if (!round) return null;
 
-  const playerId = "solo";
   const scores = [
     {
       playerId,
@@ -278,3 +273,4 @@ function SoloGamePlay({
     />
   );
 }
+

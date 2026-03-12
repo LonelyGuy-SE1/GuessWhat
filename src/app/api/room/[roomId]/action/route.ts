@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRoom, joinRoom } from "@/lib/room/manager";
+import { getRoom, joinRoom, createRoom } from "@/lib/room/manager";
 import { serializeRoom } from "@/lib/utils";
-import { getRoomApiKey } from "@/lib/room/api-key-store";
+import { getRoomApiKey, setRoomApiKey } from "@/lib/room/api-key-store";
 import { startGame, handleGuess, nextRound, pushEvent } from "@/lib/room/multiplayer-engine";
+import type { RoomSettings } from "@/lib/types";
 
 export async function POST(
   req: NextRequest,
@@ -10,16 +11,32 @@ export async function POST(
 ) {
   const { roomId } = await params;
   const body = await req.json();
-  const { action, playerName, playerId, guess } = body as {
-    action: "join" | "start_game" | "guess" | "next_round";
+  const { action, playerName, playerId, guess, roomSnapshot, apiKey } = body as {
+    action: "join" | "start_game" | "guess" | "next_round" | "restore";
     playerName?: string;
     playerId?: string;
     guess?: string;
+    roomSnapshot?: {
+      settings: RoomSettings;
+      hostName: string;
+      apiKey: string;
+    };
+    apiKey?: string;
   };
 
-  const room = getRoom(roomId);
+  let room = getRoom(roomId);
+
+  if (!room && action === "restore" && roomSnapshot) {
+    const restored = createRoom(roomSnapshot.settings, roomSnapshot.hostName, roomId);
+    if (roomSnapshot.apiKey) {
+      setRoomApiKey(restored.room.id, roomSnapshot.apiKey);
+    }
+    room = restored.room;
+    return NextResponse.json({ playerId: restored.hostPlayer.id, room: serializeRoom(room) });
+  }
+
   if (!room) {
-    return NextResponse.json({ error: "Room not found" }, { status: 404 });
+    return NextResponse.json({ error: "Room not found. It may have expired." }, { status: 404 });
   }
 
   switch (action) {
@@ -62,12 +79,16 @@ export async function POST(
         return NextResponse.json({ error: "Only the host can start the game" }, { status: 403 });
       }
 
-      const apiKey = getRoomApiKey(roomId);
-      if (!apiKey) {
+      const storedKey = getRoomApiKey(roomId) || apiKey;
+      if (!storedKey) {
         return NextResponse.json({ error: "No API key set for this room" }, { status: 400 });
       }
 
-      startGame(roomId, apiKey);
+      if (!getRoomApiKey(roomId) && storedKey) {
+        setRoomApiKey(roomId, storedKey);
+      }
+
+      startGame(roomId, storedKey);
       return NextResponse.json({ ok: true });
     }
 

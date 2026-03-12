@@ -10,7 +10,6 @@ import {
   revealHint,
   isRoundOver,
   isGameOver,
-  getLeaderboard,
 } from "@/lib/game/engine";
 
 interface UseSoloGameOptions {
@@ -39,6 +38,13 @@ const TIMER_MAP: Record<Difficulty, number> = { easy: 45, medium: 30, hard: 20 }
 export function useSoloGame({ dataset, playerName, difficulty, rounds }: UseSoloGameOptions) {
   const sessionRef = useRef<GameSession | null>(null);
   const playerIdRef = useRef<string>("");
+
+  if (!sessionRef.current) {
+    const session = createGameSession(dataset, "solo", difficulty, rounds, TIMER_MAP[difficulty], playerName);
+    sessionRef.current = session;
+    playerIdRef.current = Array.from(session.players.keys())[0];
+  }
+
   const [round, setRound] = useState<RoundData | null>(null);
   const [hints, setHints] = useState<string[]>([]);
   const [guessesLeft, setGuessesLeft] = useState(3);
@@ -53,15 +59,12 @@ export function useSoloGame({ dataset, playerName, difficulty, rounds }: UseSolo
   const hintTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    const session = createGameSession(dataset, "solo", difficulty, rounds, TIMER_MAP[difficulty], playerName);
-    sessionRef.current = session;
-    playerIdRef.current = Array.from(session.players.keys())[0];
     return () => {
       if (hintTimerRef.current) clearInterval(hintTimerRef.current);
     };
-  }, [dataset, playerName, difficulty, rounds]);
+  }, []);
 
-  const startRound = useCallback(() => {
+  const doStartRound = useCallback(() => {
     const session = sessionRef.current;
     if (!session) return;
 
@@ -109,6 +112,12 @@ export function useSoloGame({ dataset, playerName, difficulty, rounds }: UseSolo
       }
     }, interval);
   }, [difficulty]);
+
+  useEffect(() => {
+    if (phase === "idle" && sessionRef.current) {
+      doStartRound();
+    }
+  }, [phase, doStartRound]);
 
   const submitGuess = useCallback(
     (guess: string) => {
@@ -171,7 +180,8 @@ export function useSoloGame({ dataset, playerName, difficulty, rounds }: UseSolo
     error,
     phase,
     previousGuesses,
-    startRound,
+    playerId: playerIdRef.current,
+    startRound: doStartRound,
     submitGuess,
     forceEndRound,
   };

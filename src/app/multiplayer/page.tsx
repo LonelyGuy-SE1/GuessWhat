@@ -44,6 +44,11 @@ export default function MultiplayerPage() {
           playerId: data.playerId,
           playerName: hostName,
           isHost: true,
+          roomSnapshot: {
+            settings,
+            hostName,
+            apiKey,
+          },
         })
       );
 

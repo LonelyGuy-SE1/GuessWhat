@@ -12,8 +12,8 @@ const rooms = g.__guesswhat_rooms;
 
 const ROOM_TTL_MS = 3 * 60 * 60 * 1000; // 3 hours
 
-export function createRoom(settings: RoomSettings, hostName: string): { room: Room; hostPlayer: Player } {
-  const id = generateRoomCode();
+export function createRoom(settings: RoomSettings, hostName: string, forceId?: string): { room: Room; hostPlayer: Player } {
+  const id = forceId || generateRoomCode();
   const hostPlayer = createPlayer(hostName);
 
   const room: Room = {

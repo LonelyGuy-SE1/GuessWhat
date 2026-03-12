@@ -30,6 +30,7 @@ export default function RoomPage() {
   const [playerName, setPlayerName] = useState("");
   const [isHost, setIsHost] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [apiKey, setApiKey] = useState<string | null>(null);
 
   const [roundData, setRoundData] = useState<SerializedRoundState | null>(null);
   const [roundNumber, setRoundNumber] = useState(0);
@@ -48,6 +49,8 @@ export default function RoomPage() {
   const startedAtRef = useRef(Date.now());
   const cursorRef = useRef(0);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const restoringRef = useRef(false);
+  const roomSnapshotRef = useRef<{ settings: unknown; hostName: string; apiKey: string } | null>(null);
 
   const handleEvent = useCallback(
     (msg: WSServerMessage) => {
@@ -147,11 +150,16 @@ export default function RoomPage() {
     setPlayerName(data.playerName);
     setIsHost(data.isHost);
     if (data.playerId) setPlayerId(data.playerId);
+    if (data.roomSnapshot) {
+      roomSnapshotRef.current = data.roomSnapshot;
+      setApiKey(data.roomSnapshot.apiKey || null);
+    }
   }, [roomId]);
 
   useEffect(() => {
     if (!playerName) return;
-    async function join() {
+
+    async function joinOrRestore() {
       try {
         const res = await fetch(`/api/room/${roomId}/action`, {
           method: "POST",
@@ -162,15 +170,58 @@ export default function RoomPage() {
             playerId,
           }),
         });
+
+        if (res.status === 404 && isHost && roomSnapshotRef.current && !restoringRef.current) {
+          restoringRef.current = true;
+          const restoreRes = await fetch(`/api/room/${roomId}/action`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "restore",
+              roomSnapshot: roomSnapshotRef.current,
+            }),
+          });
+          if (restoreRes.ok) {
+            const data = await restoreRes.json();
+            setPlayerId(data.playerId);
+            setRoom(data.room);
+            setPhase("lobby");
+
+            const storedData = sessionStorage.getItem(`room_${roomId}`);
+            if (storedData) {
+              const parsed = JSON.parse(storedData);
+              parsed.playerId = data.playerId;
+              sessionStorage.setItem(`room_${roomId}`, JSON.stringify(parsed));
+            }
+          }
+          restoringRef.current = false;
+          return;
+        }
+
         if (!res.ok) return;
         const data = await res.json();
-        if (!playerId) setPlayerId(data.playerId);
+        if (!playerId) {
+          setPlayerId(data.playerId);
+          const storedData = sessionStorage.getItem(`room_${roomId}`);
+          if (storedData) {
+            const parsed = JSON.parse(storedData);
+            parsed.playerId = data.playerId;
+            sessionStorage.setItem(`room_${roomId}`, JSON.stringify(parsed));
+          }
+        }
+        if (data.room) {
+          setRoom(data.room);
+          if (phase === "connecting") {
+            setPhase(data.room.status === "lobby" ? "lobby" : data.room.status === "generating" ? "generating" : "playing");
+          }
+        }
       } catch {
         // ignore
       }
     }
-    join();
-  }, [roomId, playerName, playerId]);
+
+    joinOrRestore();
+  }, [roomId, playerName, playerId, isHost, phase]);
 
   useEffect(() => {
     async function poll() {
@@ -180,8 +231,37 @@ export default function RoomPage() {
           setConnected(false);
           return;
         }
-        setConnected(true);
         const data = await res.json();
+
+        if (data.roomLost) {
+          setConnected(false);
+          if (isHost && roomSnapshotRef.current && !restoringRef.current) {
+            restoringRef.current = true;
+            try {
+              const restoreRes = await fetch(`/api/room/${roomId}/action`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  action: "restore",
+                  roomSnapshot: roomSnapshotRef.current,
+                }),
+              });
+              if (restoreRes.ok) {
+                const rd = await restoreRes.json();
+                setPlayerId(rd.playerId);
+                setRoom(rd.room);
+                setPhase("lobby");
+                cursorRef.current = 0;
+              }
+            } catch {
+              // ignore
+            }
+            restoringRef.current = false;
+          }
+          return;
+        }
+
+        setConnected(true);
 
         if (data.room) {
           setRoom(data.room);
@@ -212,7 +292,7 @@ export default function RoomPage() {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [roomId, handleEvent, phase]);
+  }, [roomId, handleEvent, phase, isHost]);
 
   function postAction(action: string, payload?: Record<string, unknown>) {
     return fetch(`/api/room/${roomId}/action`, {
@@ -223,7 +303,7 @@ export default function RoomPage() {
   }
 
   function handleStartGame() {
-    postAction("start_game");
+    postAction("start_game", apiKey ? { apiKey } : undefined);
   }
 
   function handleGuess(guess: string) {
