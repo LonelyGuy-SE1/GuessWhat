@@ -1,36 +1,59 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Guess What?
 
-## Getting Started
+AI-powered visual guessing game using the Commonstack unified API.
 
-First, run the development server:
+## Quick Start
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev          # Start Next.js on http://localhost:3000
+npm run dev:ws       # Start WebSocket server on port 3001 (for multiplayer)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Game Modes
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Solo
+1. Enter your Commonstack API key
+2. Enter a topic (e.g., "famous landmarks", "animals")
+3. AI generates 5 entities with images and progressive hints
+4. Guess each entity as quickly as possible for maximum points
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Multiplayer
+1. Create a room and share the code
+2. Host starts the game when ready
+3. All players compete simultaneously
+4. First correct guess wins the round
 
-## Learn More
+## Scoring
 
-To learn more about Next.js, take a look at the following resources:
+- Base: 1000 points
+- Time penalty: -10 points/second
+- Hint penalty: -100 points per hint revealed
+- Minimum: 100 points per correct guess
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Tech Stack
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Next.js 16** with Turbopack
+- **TypeScript**
+- **TailwindCSS 4**
+- **WebSockets** for multiplayer
+- **Commonstack API** for AI (chat + image generation)
 
-## Deploy on Vercel
+## Environment
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+No environment variables required. API key is entered client-side per session.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Architecture
+
+- `src/lib/ai/` - AI orchestration, model routing, entity/hint/image generation
+- `src/lib/game/` - Game engine, session store
+- `src/lib/room/` - Multiplayer room management
+- `src/server/` - WebSocket server for real-time multiplayer
+- `src/components/` - React UI components
+- `src/hooks/` - Custom hooks (useWebSocket, useSoloGame)
+
+All data is **in-memory only** - no database, no Redis, no persistence.
+
+## License
+
+MIT
