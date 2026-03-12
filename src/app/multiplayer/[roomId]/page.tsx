@@ -133,7 +133,7 @@ export default function RoomPage() {
           break;
       }
     },
-    [playerId, phase]
+    [playerId, phase],
   );
 
   // Load session data
@@ -233,7 +233,10 @@ export default function RoomPage() {
     );
   }
 
-  if ((phase === "lobby" || phase === "generating" || phase === "connecting") && room) {
+  if (
+    (phase === "lobby" || phase === "generating" || phase === "connecting") &&
+    room
+  ) {
     return (
       <div className="max-w-lg mx-auto space-y-6">
         {error && (
