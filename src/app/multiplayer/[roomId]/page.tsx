@@ -60,6 +60,7 @@ export default function RoomPage() {
   const isHostRef = useRef(false);
   const roundNumberRef = useRef(0);
   const nextRoundPendingRef = useRef(false);
+  const pollingInProgressRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
@@ -255,6 +256,10 @@ export default function RoomPage() {
   // Polling loop - only depends on roomId and handleEvent (both stable)
   useEffect(() => {
     async function poll() {
+      // Prevent concurrent polls from processing duplicate events
+      if (pollingInProgressRef.current) return;
+      pollingInProgressRef.current = true;
+
       try {
         const res = await fetch(`/api/room/${roomId}/events?cursor=${cursorRef.current}`);
         if (!res.ok) {
@@ -346,6 +351,8 @@ export default function RoomPage() {
         }
       } catch {
         setConnected(false);
+      } finally {
+        pollingInProgressRef.current = false;
       }
     }
 
@@ -435,6 +442,20 @@ export default function RoomPage() {
   if (phase === "game_over" && finalScores) {
     return (
       <div className="max-w-lg mx-auto text-center space-y-6 py-10">
+        {/* Show last round's answer if available (round_end + game_end arrive in same batch) */}
+        {roundResult && (
+          <div className="space-y-2 py-4 border-2 border-dashed border-amber-300 rounded-2xl bg-amber-50">
+            <p className="text-sm text-stone-500">The answer was</p>
+            <h2 className="text-2xl font-bold text-stone-800">
+              {roundResult.correctAnswer}
+            </h2>
+            {roundResult.description && (
+              <p className="text-sm text-stone-600 max-w-md mx-auto px-4">
+                {roundResult.description}
+              </p>
+            )}
+          </div>
+        )}
         <h1 className="text-3xl font-bold text-stone-800">Game Over!</h1>
         <Leaderboard scores={finalScores} currentPlayerId={playerId || ""} />
         <a
