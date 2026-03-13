@@ -12,7 +12,7 @@ import {
 import { generateGameDataset } from "@/lib/ai/orchestrator";
 import { serializeRoom, answerToPattern } from "@/lib/utils";
 import { deleteRoomApiKey } from "@/lib/room/api-key-store";
-import { kvGet, kvSet, kvListAppend, kvListRange } from "@/lib/kv-store";
+import { kvGet, kvSet, kvSetNX, kvDelete, kvListAppend, kvListRange } from "@/lib/kv-store";
 
 // Map serialization helpers
 function serializeSession(session: GameSession): any {
@@ -101,42 +101,51 @@ export async function getRoomState(roomId: string) {
 // True Serverless Game Loop (Lazy Evaluation)
 // Called on every poll to advance game state based on elapsed time
 async function tickSession(roomId: string) {
-  const room = await getRoom(roomId);
-  if (!room || !room.sessionId) return;
-  
-  const session = await getSession(room.sessionId);
-  if (!session || !session.roundState) return;
+  // Distributed lock: only one tick per room at a time (short TTL since polls are 1.5s)
+  const lockKey = `lock:tick:${roomId}`;
+  const acquired = await kvSetNX(lockKey, "1", 3);
+  if (!acquired) return; // Another poll is already ticking
 
-  const rs = session.roundState;
-  const elapsed = (Date.now() - rs.startedAt) / 1000;
+  try {
+    const room = await getRoom(roomId);
+    if (!room || !room.sessionId) return;
+    
+    const session = await getSession(room.sessionId);
+    if (!session || !session.roundState) return;
 
-  let stateChanged = false;
+    const rs = session.roundState;
+    const elapsed = (Date.now() - rs.startedAt) / 1000;
 
-  // 1. Check for time-based hint reveals
-  const hintInterval = rs.timerSeconds * 0.2;
-  const expectedHints = Math.min(3, Math.floor(elapsed / hintInterval));
-  
-  if (expectedHints > rs.revealedHints) {
-    while (rs.revealedHints < expectedHints) {
-      const hintIndex = rs.revealedHints; // 0-based index for the client
-      rs.revealedHints++;
-      await pushEvent(roomId, {
-        type: "hint_revealed",
-        hintIndex, // 0-based: matches array index on client
-        hint: rs.entity.hints[hintIndex],
-      });
+    let stateChanged = false;
+
+    // 1. Check for time-based hint reveals
+    const hintInterval = rs.timerSeconds * 0.2;
+    const expectedHints = Math.min(3, Math.floor(elapsed / hintInterval));
+    
+    if (expectedHints > rs.revealedHints) {
+      while (rs.revealedHints < expectedHints) {
+        const hintIndex = rs.revealedHints; // 0-based index for the client
+        rs.revealedHints++;
+        await pushEvent(roomId, {
+          type: "hint_revealed",
+          hintIndex, // 0-based: matches array index on client
+          hint: rs.entity.hints[hintIndex],
+        });
+        stateChanged = true;
+      }
+    }
+
+    // 2. Check for timer expiration -> end round
+    if (elapsed >= rs.timerSeconds && session.roundState) {
+      await handleRoundEndInner(roomId, session);
       stateChanged = true;
     }
-  }
 
-  // 2. Check for timer expiration -> end round
-  if (elapsed >= rs.timerSeconds && session.roundState) {
-    await handleRoundEndInner(roomId, session);
-    stateChanged = true;
-  }
-
-  if (stateChanged) {
-    await saveSession(session);
+    if (stateChanged) {
+      await saveSession(session);
+    }
+  } finally {
+    await kvDelete(lockKey);
   }
 }
 
@@ -163,40 +172,56 @@ async function handleRoundEndInner(roomId: string, session: GameSession) {
 }
 
 export async function startRound(roomId: string, sessionId: string) {
-  const session = await getSession(sessionId);
-  if (!session) return;
-  const room = await getRoom(roomId);
-  if (!room) return;
+  // Distributed lock: only one startRound can execute per room at a time
+  const lockKey = `lock:startRound:${roomId}`;
+  const acquired = await kvSetNX(lockKey, "1", 10);
+  if (!acquired) return; // Another call is already handling this
 
-  const roundState = startNextRound(session, room.timerSeconds);
-  if (!roundState) {
-    const finalScores = getLeaderboard(session);
-    await pushEvent(roomId, { type: "game_end", finalScores });
-    await setRoomStatus(roomId, "finished");
-    return;
+  try {
+    const session = await getSession(sessionId);
+    if (!session) return;
+
+    // Guard: if a round is already in progress, ignore (prevents double-click issues)
+    if (session.roundState) return;
+
+    // Guard: if all rounds are done, don't start another (prevents premature game_end from duplicate calls)
+    if (session.currentRound >= session.totalRounds) return;
+
+    const room = await getRoom(roomId);
+    if (!room) return;
+
+    const roundState = startNextRound(session, room.timerSeconds);
+    if (!roundState) {
+      const finalScores = getLeaderboard(session);
+      await pushEvent(roomId, { type: "game_end", finalScores });
+      await setRoomStatus(roomId, "finished");
+      return;
+    }
+
+    await saveSession(session);
+
+    const revealedHints: string[] = [];
+    for (let i = 0; i < roundState.revealedHints; i++) {
+      revealedHints.push(roundState.entity.hints[i]);
+    }
+
+    await pushEvent(roomId, {
+      type: "round_start",
+      round: {
+        roundNumber: roundState.roundNumber,
+        imageUrl: roundState.entity.imageUrl,
+        startedAt: roundState.startedAt,
+        timerSeconds: roundState.timerSeconds,
+        revealedHints: roundState.revealedHints,
+        hints: revealedHints,
+        answerPattern: answerToPattern(roundState.entity.name),
+      },
+      roundNumber: session.currentRound,
+      totalRounds: session.totalRounds,
+    });
+  } finally {
+    await kvDelete(lockKey);
   }
-
-  await saveSession(session);
-
-  const revealedHints: string[] = [];
-  for (let i = 0; i < roundState.revealedHints; i++) {
-    revealedHints.push(roundState.entity.hints[i]);
-  }
-
-  await pushEvent(roomId, {
-    type: "round_start",
-    round: {
-      roundNumber: roundState.roundNumber,
-      imageUrl: roundState.entity.imageUrl,
-      startedAt: roundState.startedAt,
-      timerSeconds: roundState.timerSeconds,
-      revealedHints: roundState.revealedHints,
-      hints: revealedHints,
-      answerPattern: answerToPattern(roundState.entity.name),
-    },
-    roundNumber: session.currentRound,
-    totalRounds: session.totalRounds,
-  });
 }
 
 export async function startGame(roomId: string, apiKey: string) {

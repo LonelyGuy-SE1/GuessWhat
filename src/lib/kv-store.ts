@@ -111,6 +111,31 @@ export async function kvKeys(pattern: string): Promise<string[]> {
   return keys;
 }
 
+// ─── Atomic set-if-not-exists (for distributed locks) ───
+
+/**
+ * SET key value NX EX ttl — returns true if the key was set (lock acquired),
+ * false if it already existed (lock held by someone else).
+ * In memory mode, uses a simple has() check (good enough for local dev).
+ */
+export async function kvSetNX(key: string, value: string, ttlSec: number): Promise<boolean> {
+  if (isKvEnabled) {
+    try {
+      const result = await getRedis().set(key, value, "EX", ttlSec, "NX");
+      return result === "OK";
+    } catch (err) {
+      console.error(`[kv-store] kvSetNX("${key}") failed:`, err);
+      return false;
+    }
+  }
+
+  if (memoryStore.has(key)) return false;
+  memoryStore.set(key, value);
+  // Auto-expire for memory store
+  setTimeout(() => memoryStore.delete(key), ttlSec * 1000);
+  return true;
+}
+
 // ─── List operations (atomic append via RPUSH) ───
 
 /**

@@ -59,6 +59,7 @@ export default function RoomPage() {
   const phaseRef = useRef<RoomPhase>("connecting");
   const isHostRef = useRef(false);
   const roundNumberRef = useRef(0);
+  const nextRoundPendingRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
@@ -104,6 +105,7 @@ export default function RoomPage() {
           break;
 
         case "round_start":
+          nextRoundPendingRef.current = false;
           setRoundData(msg.round);
           setRoundNumber(msg.roundNumber);
           setTotalRounds(msg.totalRounds);
@@ -146,6 +148,7 @@ export default function RoomPage() {
           break;
 
         case "game_end":
+          nextRoundPendingRef.current = false;
           setFinalScores(msg.finalScores);
           setScores(msg.finalScores);
           setPhase("game_over");
@@ -371,6 +374,8 @@ export default function RoomPage() {
   }
 
   function handleNextRound() {
+    if (nextRoundPendingRef.current) return; // Prevent double-clicks
+    nextRoundPendingRef.current = true;
     postAction("next_round");
   }
 
