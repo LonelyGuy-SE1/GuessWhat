@@ -3,7 +3,6 @@ import type {
   GameDataset,
   Player,
   RoundState,
-  PlayerRoundState,
   PlayerScore,
   Difficulty,
 } from "@/lib/types";

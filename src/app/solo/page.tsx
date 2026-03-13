@@ -253,7 +253,6 @@ function SoloGamePlay({
 
   return (
     <GameScreen
-      mode="solo"
       imageUrl={round.imageUrl}
       roundNumber={round.roundNumber}
       totalRounds={round.totalRounds}
@@ -261,9 +260,9 @@ function SoloGamePlay({
       startedAt={Date.now()}
       hints={hints}
       guessesLeft={guessesLeft}
-      score={score}
       scores={roundEnd?.scores ?? scores}
       currentPlayerId={playerId}
+      answerPattern={round.answerPattern}
       onGuess={submitGuess}
       onTimerExpire={forceEndRound}
       roundResult={roundEnd}

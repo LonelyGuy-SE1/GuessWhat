@@ -13,7 +13,27 @@ interface GuessFeedProps {
 }
 
 export default function GuessFeed({ guesses, currentPlayerId }: GuessFeedProps) {
-  if (guesses.length === 0) {
+  // Find players who guessed correctly — hide ALL their guesses from other players
+  const correctPlayerIds = new Set(
+    guesses.filter((g) => g.correct).map((g) => g.playerId)
+  );
+
+  // Filter guesses: show your own guesses, but hide other players' guesses
+  // once they got the correct answer (to prevent revealing the answer)
+  const visibleGuesses = guesses.filter((g) => {
+    if (g.playerId === currentPlayerId) {
+      // Always show your own guesses (you already know if you got it right)
+      return true;
+    }
+    // For other players: hide all their guesses once they got it right
+    if (correctPlayerIds.has(g.playerId)) {
+      return false;
+    }
+    // Show incorrect guesses from other players
+    return true;
+  });
+
+  if (visibleGuesses.length === 0) {
     return (
       <div className="border-2 border-dashed border-stone-200 rounded-xl p-4">
         <h3 className="text-sm font-semibold text-stone-500 mb-2">Live Guesses</h3>
@@ -26,7 +46,7 @@ export default function GuessFeed({ guesses, currentPlayerId }: GuessFeedProps) 
     <div className="border-2 border-dashed border-stone-200 rounded-xl p-4">
       <h3 className="text-sm font-semibold text-stone-500 mb-3">Live Guesses</h3>
       <div className="space-y-1.5 max-h-48 overflow-y-auto">
-        {guesses.map((g, i) => {
+        {visibleGuesses.map((g, i) => {
           const isYou = g.playerId === currentPlayerId;
           return (
             <div
@@ -50,7 +70,7 @@ export default function GuessFeed({ guesses, currentPlayerId }: GuessFeedProps) 
                   g.correct ? "text-emerald-700 font-medium" : "text-stone-500 line-through"
                 }`}
               >
-                {g.guess}
+                {g.correct ? "Got it!" : g.guess}
               </span>
               {g.correct && (
                 <span className="text-emerald-500 ml-auto shrink-0">✓</span>

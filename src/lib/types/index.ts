@@ -80,14 +80,7 @@ export interface RoomSettings {
   maxPlayers: number;
 }
 
-// ─── WebSocket Message Types ───
-
-export type WSClientMessage =
-  | { type: "join_room"; roomId: string; playerName: string; playerId?: string }
-  | { type: "start_game"; roomId: string }
-  | { type: "guess"; roomId: string; guess: string }
-  | { type: "next_round"; roomId: string }
-  | { type: "ping" };
+// ─── Event Message Types ───
 
 export type WSServerMessage =
   | { type: "room_state"; room: SerializedRoom }
@@ -140,17 +133,12 @@ export interface SerializedRoundState {
   timerSeconds: number;
   revealedHints: number;
   hints: string[]; // only the revealed ones
+  answerPattern: number[]; // length of each word, e.g. [6, 5] for "Eiffel Tower"
 }
 
 // ─── AI Types ───
 
-export type ModelTask = "orchestrate" | "generate_entities" | "generate_hints" | "validate_image" | "generate_image";
-
-export interface ModelChoice {
-  model: string;
-  task: ModelTask;
-  reason: string;
-}
+export type ModelTask = "generate_entities" | "generate_hints" | "generate_image";
 
 export interface CommonStackMessage {
   role: "system" | "user" | "assistant";

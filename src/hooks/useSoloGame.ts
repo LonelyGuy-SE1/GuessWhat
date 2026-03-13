@@ -24,6 +24,7 @@ interface RoundData {
   imageUrl: string;
   timerSeconds: number;
   totalRounds: number;
+  answerPattern: number[];
 }
 
 interface RoundEndData {
@@ -94,6 +95,7 @@ export function useSoloGame({ dataset, playerName, difficulty, rounds }: UseSolo
       imageUrl: roundState.entity.imageUrl,
       timerSeconds: roundState.timerSeconds,
       totalRounds: session.totalRounds,
+      answerPattern: roundState.entity.name.trim().split(/\s+/).map((w) => w.length),
     });
     setPhase("playing");
     setLoading(false);
@@ -179,7 +181,6 @@ export function useSoloGame({ dataset, playerName, difficulty, rounds }: UseSolo
     gameOver,
     loading,
     error,
-    phase,
     previousGuesses,
     playerId: playerIdRef.current,
     startRound: doStartRound,

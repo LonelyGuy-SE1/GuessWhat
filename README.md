@@ -1,58 +1,42 @@
 # Guess What?
 
-AI-powered visual guessing game using the Commonstack unified API.
+AI-powered visual guessing game. The AI generates images based on a topic you choose, and you try to guess what each one is using hints that reveal over time.
 
-## Quick Start
+Play it at [lonelyguesswhat.vercel.app](https://lonelyguesswhat.vercel.app)
 
-```bash
-npm install
-npm run dev          # Start Next.js on http://localhost:3000
-npm run dev:ws       # Start WebSocket server on port 3001 (for multiplayer)
-```
-
-## Game Modes
+## How to Play
 
 ### Solo
-1. Enter your Commonstack API key
-2. Enter a topic (e.g., "famous landmarks", "animals")
-3. AI generates 5 entities with images and progressive hints
-4. Guess each entity as quickly as possible for maximum points
+
+1. Enter your [Commonstack](https://commonstack.ai) API key
+2. Pick a topic (e.g. "world flags", "famous paintings", "dog breeds")
+3. Choose difficulty and number of rounds
+4. For each round: look at the image, read the hints as they appear, and type your guess
+5. Faster guesses with fewer hints = more points
 
 ### Multiplayer
-1. Create a room and share the code
-2. Host starts the game when ready
-3. All players compete simultaneously
-4. First correct guess wins the round
 
-## Scoring
+1. One player creates a room and shares the 6-letter code
+2. Other players join using the code
+3. Host starts the game when everyone's in
+4. Everyone guesses at the same time — scores update live
+5. Host advances to the next round
 
-- Base: 1000 points
-- Time penalty: -10 points/second
-- Hint penalty: -100 points per hint revealed
-- Minimum: 100 points per correct guess
+### Tips
 
-## Tech Stack
+- You get 3 guesses per round and 3 hints that reveal gradually
+- Dashes below the image show how many words and letters the answer has
+- Spelling doesn't have to be perfect — close enough counts
+- Higher difficulty = harder subjects, less time, more points
 
-- **Next.js 16** with Turbopack
-- **TypeScript**
-- **TailwindCSS 4**
-- **WebSockets** for multiplayer
-- **Commonstack API** for AI (chat + image generation)
+## Running Locally
 
-## Environment
+```
+npm install
+npm run dev
+```
 
-No environment variables required. API key is entered client-side per session.
-
-## Architecture
-
-- `src/lib/ai/` - AI orchestration, model routing, entity/hint/image generation
-- `src/lib/game/` - Game engine, session store
-- `src/lib/room/` - Multiplayer room management
-- `src/server/` - WebSocket server for real-time multiplayer
-- `src/components/` - React UI components
-- `src/hooks/` - Custom hooks (useWebSocket, useSoloGame)
-
-All data is **in-memory only** - no database, no Redis, no persistence.
+Needs a `KV_REDIS_URL` environment variable for multiplayer (standard Redis connection string). Solo mode works without it.
 
 ## License
 

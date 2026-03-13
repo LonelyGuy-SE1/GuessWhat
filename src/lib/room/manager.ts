@@ -66,28 +66,6 @@ export async function joinRoom(roomId: string, playerName: string): Promise<{ pl
   return { player, room };
 }
 
-export async function removePlayer(roomId: string, playerId: string): Promise<Room | null> {
-  const room = await getRoom(roomId);
-  if (!room) return null;
-
-  room.players.delete(playerId);
-
-  if (room.players.size === 0) {
-    await deleteRoom(roomId);
-    return null;
-  }
-
-  if (room.hostId === playerId) {
-    const nextPlayer = room.players.values().next().value;
-    if (nextPlayer) {
-      room.hostId = nextPlayer.id;
-    }
-  }
-
-  await saveRoom(room);
-  return room;
-}
-
 export async function setRoomStatus(roomId: string, status: Room["status"]): Promise<void> {
   const room = await getRoom(roomId);
   if (room) {

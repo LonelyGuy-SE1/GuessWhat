@@ -20,16 +20,39 @@ export async function generateEntities(
   const model = getModelName("generate_entities");
 
   const difficultyGuidance: Record<Difficulty, string> = {
-    easy: "Choose well-known, popular entities that most people would recognize.",
-    medium: "Mix well-known entities with some lesser-known but noteworthy ones.",
-    hard: "Choose obscure, specialist-knowledge entities that would challenge experts.",
+    easy: `EASY DIFFICULTY — Choose entities that are universally well-known:
+- Household names, iconic landmarks, famous celebrities, popular animals
+- Things a casual person with no special knowledge would recognize from an image
+- Examples for "countries": USA, France, Japan. For "animals": dog, elephant, lion.
+- The image alone should be enough for most people to guess correctly`,
+    medium: `MEDIUM DIFFICULTY — Mix well-known with moderately challenging:
+- About half should be recognizable to most people, half should require some knowledge
+- Include some entities that are well-known within their field but not universally famous
+- Examples for "countries": Croatia, Peru, Vietnam. For "animals": pangolin, axolotl, capybara.`,
+    hard: `HARD DIFFICULTY — Choose obscure, expert-level entities:
+- Specialist knowledge required. Most people would NOT recognize these from an image alone
+- Deep cuts, niche entries, lesser-known variants
+- Examples for "countries": Eswatini, Comoros, Nauru. For "animals": fossa, tarsier, okapi.
+- Even with hints, these should challenge knowledgeable players`,
   };
 
   const systemPrompt = `You are a trivia game entity generator. Given a topic, produce a JSON array of ${count} unique entities related to that topic.
 
+NAMING RULES (CRITICAL):
+- "name" must be the SHORT, core identifying name — NOT prefixed with the topic.
+- If the topic is "flags", name the entity "Bhutan" NOT "Flag of Bhutan"
+- If the topic is "landmarks", name it "Colosseum" NOT "The Colosseum of Rome"
+- If the topic is "movies", name it "Inception" NOT "The Movie Inception"
+- The name should be what a player would naturally type as their guess
+
 Each entity must have:
-- "name": the entity's proper name
-- "acceptedAnswers": an array of 2-4 alternative valid names, casual names, last names, or partial names that a normal human might guess for this entity
+- "name": the entity's short, core identifying name (see naming rules above)
+- "acceptedAnswers": an array of 3-6 alternative valid answers a human might type. Include:
+  * Common abbreviations or nicknames
+  * Partial names (e.g. last name only for a person)
+  * Casual/colloquial names
+  * Spelling variants or transliterations
+  * The full formal name if "name" is a short version
 - "imageUrl": a direct URL to a real, publicly accessible image of this entity (e.g., from Wikimedia Commons, Wikipedia, or official sources). ONLY provide this if you are 100% certain the URL exists and is correct. If you are NOT sure, OMIT this field entirely — do NOT guess or fabricate URLs.
 - "description": a 1-2 sentence factual description (DO NOT include the name in the description)
 - "category": a sub-category within the topic

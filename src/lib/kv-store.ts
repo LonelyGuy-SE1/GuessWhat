@@ -2,7 +2,7 @@ import Redis from "ioredis";
 
 // Redis is enabled when a connection URL is provided.
 // Vercel injects KV_REDIS_URL when you link a Redis store to the project.
-export const isKvEnabled = !!process.env.KV_REDIS_URL;
+const isKvEnabled = !!process.env.KV_REDIS_URL;
 
 // Reuse a single Redis connection across warm serverless invocations.
 // ioredis handles reconnection and buffering automatically.

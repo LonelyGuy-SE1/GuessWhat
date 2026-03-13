@@ -416,7 +416,6 @@ export default function RoomPage() {
           </div>
         )}
         <GameScreen
-          mode="multiplayer"
           imageUrl={roundData.imageUrl}
           roundNumber={roundNumber}
           totalRounds={totalRounds}
@@ -424,9 +423,9 @@ export default function RoomPage() {
           startedAt={startedAtRef.current}
           hints={hints}
           guessesLeft={guessesLeft}
-          score={scores.find((s) => s.playerId === playerId)?.score ?? 0}
           scores={scores}
           currentPlayerId={playerId || ""}
+          answerPattern={roundData.answerPattern || []}
           onGuess={handleGuess}
           onTimerExpire={() => {}}
           roundResult={roundResult}

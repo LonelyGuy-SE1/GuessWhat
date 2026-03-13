@@ -47,23 +47,3 @@ Category: "${category}"`;
 
   return [parsed[0], parsed[1], parsed[2]];
 }
-
-export async function generateHintsBatch(
-  apiKey: string,
-  entities: { name: string; description: string; category: string }[],
-  difficulty: Difficulty
-): Promise<[string, string, string][]> {
-  // Process in parallel batches of 5 to balance speed and rate limits
-  const batchSize = 5;
-  const results: [string, string, string][] = [];
-
-  for (let i = 0; i < entities.length; i += batchSize) {
-    const batch = entities.slice(i, i + batchSize);
-    const batchResults = await Promise.all(
-      batch.map((e) => generateHints(apiKey, e.name, e.description, e.category, difficulty))
-    );
-    results.push(...batchResults);
-  }
-
-  return results;
-}

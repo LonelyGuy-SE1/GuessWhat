@@ -7,7 +7,6 @@ import Timer from "./Timer";
 import Leaderboard from "./Leaderboard";
 
 interface GameScreenProps {
-  mode: "solo" | "multiplayer";
   imageUrl: string;
   roundNumber: number;
   totalRounds: number;
@@ -15,7 +14,6 @@ interface GameScreenProps {
   startedAt: number;
   hints: string[];
   guessesLeft: number;
-  score: number;
   scores: {
     playerId: string;
     playerName: string;
@@ -23,6 +21,7 @@ interface GameScreenProps {
     roundScore: number;
   }[];
   currentPlayerId: string;
+  answerPattern: number[];
   onGuess: (guess: string) => void;
   onTimerExpire: () => void;
   roundResult: {
@@ -51,6 +50,7 @@ export default function GameScreen({
   guessesLeft,
   scores,
   currentPlayerId,
+  answerPattern,
   onGuess,
   onTimerExpire,
   roundResult,
@@ -125,6 +125,19 @@ export default function GameScreen({
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           <div className="lg:col-span-3 space-y-4">
             <ImageViewer src={imageUrl} />
+            {/* Answer pattern: dashes showing word lengths */}
+            <div className="flex items-center justify-center gap-3 py-2">
+              {answerPattern.map((wordLen, wi) => (
+                <div key={wi} className="flex gap-1">
+                  {Array.from({ length: wordLen }).map((_, ci) => (
+                    <span
+                      key={ci}
+                      className="inline-block w-4 h-1 bg-stone-400 rounded-full"
+                    />
+                  ))}
+                </div>
+              ))}
+            </div>
             <GuessInput
               onSubmit={onGuess}
               guessesLeft={guessesLeft}

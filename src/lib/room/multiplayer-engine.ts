@@ -10,7 +10,7 @@ import {
   getLeaderboard,
 } from "@/lib/game/engine";
 import { generateGameDataset } from "@/lib/ai/orchestrator";
-import { serializeRoom } from "@/lib/utils";
+import { serializeRoom, answerToPattern } from "@/lib/utils";
 import { deleteRoomApiKey } from "@/lib/room/api-key-store";
 import { kvGet, kvSet } from "@/lib/kv-store";
 
@@ -93,6 +93,7 @@ export async function getRoomState(roomId: string) {
         timerSeconds: rs.timerSeconds,
         revealedHints: rs.revealedHints,
         hints: revealedHints,
+        answerPattern: answerToPattern(rs.entity.name),
       };
     }
   }
@@ -194,6 +195,7 @@ export async function startRound(roomId: string, sessionId: string) {
       timerSeconds: roundState.timerSeconds,
       revealedHints: roundState.revealedHints,
       hints: revealedHints,
+      answerPattern: answerToPattern(roundState.entity.name),
     },
     roundNumber: session.currentRound,
     totalRounds: session.totalRounds,
@@ -260,7 +262,8 @@ export async function handleGuess(roomId: string, playerId: string, guess: strin
     type: "guess_result",
     playerId,
     playerName: player?.name || "Unknown",
-    guess,
+    // Redact the guess text when correct so other players can't see the answer
+    guess: result.correct ? "" : guess,
     correct: result.correct,
     guessesLeft: result.guessesLeft,
   });
