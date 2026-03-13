@@ -10,6 +10,7 @@ import type {
 } from "@/lib/types";
 import Lobby from "@/components/Lobby";
 import GameScreen from "@/components/GameScreen";
+import GuessFeed from "@/components/GuessFeed";
 import Leaderboard from "@/components/Leaderboard";
 
 type RoomPhase =
@@ -45,12 +46,14 @@ export default function RoomPage() {
   } | null>(null);
   const [finalScores, setFinalScores] = useState<PlayerScore[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [guessLog, setGuessLog] = useState<{ playerId: string; playerName: string; guess: string; correct: boolean }[]>([]);
 
   const startedAtRef = useRef(Date.now());
   const cursorRef = useRef(0);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const restoringRef = useRef(false);
   const roomSnapshotRef = useRef<{ settings: unknown; hostName: string; apiKey: string } | null>(null);
+  const joinedRef = useRef(false);
 
   const handleEvent = useCallback(
     (msg: WSServerMessage) => {
@@ -94,6 +97,7 @@ export default function RoomPage() {
           setHints(msg.round.hints || []);
           setGuessesLeft(3);
           setRoundResult(null);
+          setGuessLog([]);
           startedAtRef.current = msg.round.startedAt;
           setPhase("playing");
           break;
@@ -107,6 +111,12 @@ export default function RoomPage() {
           break;
 
         case "guess_result":
+          setGuessLog((prev) => [...prev, {
+            playerId: msg.playerId,
+            playerName: msg.playerName,
+            guess: msg.guess,
+            correct: msg.correct,
+          }]);
           if (msg.playerId === playerId) {
             setGuessesLeft(msg.guessesLeft);
           }
@@ -157,7 +167,7 @@ export default function RoomPage() {
   }, [roomId]);
 
   useEffect(() => {
-    if (!playerName) return;
+    if (!playerName || joinedRef.current) return;
 
     async function joinOrRestore() {
       try {
@@ -209,6 +219,7 @@ export default function RoomPage() {
             sessionStorage.setItem(`room_${roomId}`, JSON.stringify(parsed));
           }
         }
+        joinedRef.current = true;
         if (data.room) {
           setRoom(data.room);
           if (phase === "connecting") {
@@ -221,7 +232,7 @@ export default function RoomPage() {
     }
 
     joinOrRestore();
-  }, [roomId, playerName, playerId, isHost, phase]);
+  }, [roomId, playerName, playerId]);
 
   useEffect(() => {
     async function poll() {
@@ -409,6 +420,7 @@ export default function RoomPage() {
           gameOver={false}
           disabled={!connected}
         />
+        <GuessFeed guesses={guessLog} currentPlayerId={playerId || ""} />
         {phase === "round_end" && !isHost && (
           <p className="text-center text-sm text-stone-400">
             Waiting for host to start next round...

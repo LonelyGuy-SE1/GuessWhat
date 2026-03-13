@@ -8,7 +8,7 @@ export async function GET(
   const { roomId } = await params;
   const cursor = parseInt(req.nextUrl.searchParams.get("cursor") ?? "0", 10);
 
-  const state = getRoomState(roomId);
+  const state = await getRoomState(roomId);
 
   if (!state) {
     return NextResponse.json({
@@ -20,7 +20,7 @@ export async function GET(
     });
   }
 
-  const { events, cursor: newCursor } = getEvents(roomId, cursor);
+  const { events, cursor: newCursor } = await getEvents(roomId, cursor);
 
   return NextResponse.json({
     ...state,

@@ -8,6 +8,7 @@ export interface Entity {
   year?: string;
   imageUrl: string;
   hints: [string, string, string]; // broad, contextual, specific
+  acceptedAnswers: string[];
 }
 
 export interface GameDataset {
@@ -93,7 +94,7 @@ export type WSServerMessage =
   | { type: "game_started"; sessionId: string }
   | { type: "round_start"; round: SerializedRoundState; roundNumber: number; totalRounds: number }
   | { type: "hint_revealed"; hintIndex: number; hint: string }
-  | { type: "guess_result"; playerId: string; correct: boolean; guessesLeft: number }
+  | { type: "guess_result"; playerId: string; playerName: string; guess: string; correct: boolean; guessesLeft: number }
   | { type: "round_end"; scores: PlayerScore[]; correctAnswer: string; description: string }
   | { type: "game_end"; finalScores: PlayerScore[] }
   | { type: "player_joined"; player: SerializedPlayer }
@@ -122,6 +123,7 @@ export interface SerializedRoom {
   players: SerializedPlayer[];
   sessionId: string | null;
   status: "lobby" | "generating" | "playing" | "finished";
+  createdAt: number;
 }
 
 export interface SerializedPlayer {

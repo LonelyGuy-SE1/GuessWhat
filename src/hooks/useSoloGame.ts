@@ -98,7 +98,7 @@ export function useSoloGame({ dataset, playerName, difficulty, rounds }: UseSolo
     setPhase("playing");
     setLoading(false);
 
-    const interval = (timerSeconds * 1000) / 3;
+    const interval = (timerSeconds * 1000) * 0.2;
     let count = 0;
     hintTimerRef.current = setInterval(() => {
       count++;

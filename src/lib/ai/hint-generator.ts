@@ -17,16 +17,16 @@ export async function generateHints(
     hard: "Hints should be subtle and indirect. Even Hint 3 should require expertise.",
   };
 
-  const systemPrompt = `You generate hints for a visual guessing game. The player sees an image and must guess what it is.
+  const systemPrompt = `You generate exactly 3 ACCURATE and FACTUAL hints for a visual guessing game. The player sees an image and must guess what it is.
 
-Generate exactly 3 hints for the given entity:
-- Hint 1: A broad, vague clue (category or era)
-- Hint 2: A contextual clue (location, purpose, or notable feature)
-- Hint 3: A specific clue (unique characteristic without naming the answer)
+Generate exactly 3 hints for the given entity. Hints must be explicitly true and related to the entity. No vague nonsense.
+- Hint 1: A broad but accurate factual clue (category, era, or region)
+- Hint 2: A contextual factual clue (location, specific purpose, or notable feature)
+- Hint 3: A highly specific, narrow clue (unique characteristic or famous association without naming the answer directly)
 
 ${difficultyGuidance[difficulty]}
 
-CRITICAL: Hints must NEVER contain the entity name or obvious synonyms.
+CRITICAL: Hints must NEVER contain the entity name, parts of the entity name, or obvious synonyms. They must be factual and correct.
 Return ONLY a JSON array of 3 strings. No markdown, no explanations.`;
 
   const userPrompt = `Entity: "${entityName}"

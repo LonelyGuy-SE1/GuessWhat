@@ -22,9 +22,9 @@ export default function RoomCreation({
   const [hostName, setHostName] = useState("");
   const [topic, setTopic] = useState("");
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
-  const [rounds, setRounds] = useState(10);
-  const [timer, setTimer] = useState(30);
-  const [maxPlayers, setMaxPlayers] = useState(20);
+  const [rounds, setRounds] = useState<number | "">(10);
+  const [timer, setTimer] = useState<number | "">(30);
+  const [maxPlayers, setMaxPlayers] = useState<number | "">(20);
   const [roomName, setRoomName] = useState("");
 
   function handleSubmit(e: React.FormEvent) {
@@ -35,9 +35,9 @@ export default function RoomCreation({
         name: roomName || `${hostName}'s Room`,
         topic,
         difficulty,
-        totalRounds: rounds,
-        timerSeconds: timer,
-        maxPlayers,
+        totalRounds: rounds || 10,
+        timerSeconds: timer || 30,
+        maxPlayers: maxPlayers || 20,
       },
       apiKey,
       hostName,
@@ -99,7 +99,7 @@ export default function RoomCreation({
           <input
             type="number"
             value={rounds}
-            onChange={(e) => setRounds(parseInt(e.target.value) || 10)}
+            onChange={(e) => setRounds(e.target.value === "" ? "" : parseInt(e.target.value) || 1)}
             min={1}
             max={50}
             className="w-full px-4 py-2.5 border-2 border-dashed border-stone-300 rounded-xl bg-white text-stone-800 focus:border-amber-400 focus:outline-none transition-colors"
@@ -113,7 +113,7 @@ export default function RoomCreation({
           <input
             type="number"
             value={timer}
-            onChange={(e) => setTimer(parseInt(e.target.value) || 30)}
+            onChange={(e) => setTimer(e.target.value === "" ? "" : parseInt(e.target.value) || 10)}
             min={10}
             max={120}
             className="w-full px-4 py-2.5 border-2 border-dashed border-stone-300 rounded-xl bg-white text-stone-800 focus:border-amber-400 focus:outline-none transition-colors"
@@ -127,7 +127,7 @@ export default function RoomCreation({
           <input
             type="number"
             value={maxPlayers}
-            onChange={(e) => setMaxPlayers(parseInt(e.target.value) || 20)}
+            onChange={(e) => setMaxPlayers(e.target.value === "" ? "" : parseInt(e.target.value) || 2)}
             min={2}
             max={100}
             className="w-full px-4 py-2.5 border-2 border-dashed border-stone-300 rounded-xl bg-white text-stone-800 focus:border-amber-400 focus:outline-none transition-colors"

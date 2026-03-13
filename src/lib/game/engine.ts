@@ -108,7 +108,7 @@ export function processGuess(
   }
 
   playerState.guessesUsed++;
-  const correct = checkGuess(guess, rs.entity.name);
+  const correct = checkGuess(guess, rs.entity.name, rs.entity.acceptedAnswers);
 
   if (correct) {
     playerState.guessedCorrectly = true;

@@ -1,11 +1,10 @@
-import type { WSServerMessage } from "@/lib/types";
+import type { WSServerMessage, GameSession } from "@/lib/types";
 import { getRoom, setRoomStatus, setRoomSession } from "@/lib/room/manager";
 import {
   createGameSession,
   startNextRound,
   processGuess,
   endRound,
-  revealHint,
   isRoundOver,
   isGameOver,
   getLeaderboard,
@@ -13,54 +12,96 @@ import {
 import { generateGameDataset } from "@/lib/ai/orchestrator";
 import { serializeRoom } from "@/lib/utils";
 import { deleteRoomApiKey } from "@/lib/room/api-key-store";
+import { kvGet, kvSet, isKvEnabled } from "@/lib/kv-store";
+
+// Map serialization helpers
+function serializeSession(session: GameSession): any {
+  return {
+    ...session,
+    players: Array.from(session.players.entries()),
+    roundState: session.roundState ? {
+      ...session.roundState,
+      guesses: Array.from(session.roundState.guesses.entries())
+    } : null
+  };
+}
+
+function deserializeSession(data: any): GameSession {
+  return {
+    ...data,
+    players: new Map(data.players),
+    roundState: data.roundState ? {
+      ...data.roundState,
+      guesses: new Map(data.roundState.guesses)
+    } : null
+  };
+}
 
 const g = global as typeof globalThis & {
-  __guesswhat_hintTimers?: Map<string, ReturnType<typeof setInterval>>;
-  __guesswhat_roundTimers?: Map<string, ReturnType<typeof setTimeout>>;
-  __guesswhat_sessions?: Map<string, import("@/lib/types").GameSession>;
+  __guesswhat_sessions?: Map<string, GameSession>;
   __guesswhat_events?: Map<string, WSServerMessage[]>;
 };
-if (!g.__guesswhat_hintTimers) g.__guesswhat_hintTimers = new Map();
-if (!g.__guesswhat_roundTimers) g.__guesswhat_roundTimers = new Map();
 if (!g.__guesswhat_sessions) g.__guesswhat_sessions = new Map();
 if (!g.__guesswhat_events) g.__guesswhat_events = new Map();
-const hintTimers = g.__guesswhat_hintTimers;
-const roundTimers = g.__guesswhat_roundTimers;
-const sessions = g.__guesswhat_sessions;
-const eventQueues = g.__guesswhat_events;
+const fallbackSessions = g.__guesswhat_sessions;
+const fallbackEvents = g.__guesswhat_events;
 
-function getSessionLocal(sessionId: string) {
-  return sessions.get(sessionId);
+async function saveSession(session: GameSession) {
+  await kvSet(`session:${session.id}`, serializeSession(session), 3 * 3600);
+  if (!isKvEnabled) fallbackSessions.set(session.id, session);
 }
 
-export function pushEvent(roomId: string, msg: WSServerMessage) {
-  if (!eventQueues.has(roomId)) {
-    eventQueues.set(roomId, []);
+async function getSession(sessionId: string): Promise<GameSession | null> {
+  const data = await kvGet<any>(`session:${sessionId}`);
+  if (data) return deserializeSession(data);
+  if (!isKvEnabled) return fallbackSessions.get(sessionId) || null;
+  return null;
+}
+
+export async function pushEvent(roomId: string, msg: WSServerMessage) {
+  let queue: WSServerMessage[] = [];
+  if (isKvEnabled) {
+    queue = (await kvGet<WSServerMessage[]>(`events:${roomId}`)) || [];
+  } else {
+    queue = fallbackEvents.get(roomId) || [];
   }
-  const queue = eventQueues.get(roomId)!;
+
   queue.push(msg);
-  if (queue.length > 100) {
-    queue.splice(0, queue.length - 100);
+  if (queue.length > 100) queue.splice(0, queue.length - 100);
+
+  if (isKvEnabled) {
+    await kvSet(`events:${roomId}`, queue, 3 * 3600);
+  } else {
+    fallbackEvents.set(roomId, queue);
   }
 }
 
-export function getEvents(roomId: string, since: number): { events: WSServerMessage[]; cursor: number } {
-  const queue = eventQueues.get(roomId);
-  if (!queue || since >= queue.length) {
-    return { events: [], cursor: queue?.length ?? 0 };
+export async function getEvents(roomId: string, since: number): Promise<{ events: WSServerMessage[]; cursor: number }> {
+  // Tick time progress before returning events to make KV completely serverless
+  await tickSession(roomId);
+
+  let queue: WSServerMessage[] = [];
+  if (isKvEnabled) {
+    queue = (await kvGet<WSServerMessage[]>(`events:${roomId}`)) || [];
+  } else {
+    queue = fallbackEvents.get(roomId) || [];
+  }
+
+  if (since >= queue.length) {
+    return { events: [], cursor: queue.length };
   }
   return { events: queue.slice(since), cursor: queue.length };
 }
 
-export function getRoomState(roomId: string) {
-  const room = getRoom(roomId);
+export async function getRoomState(roomId: string) {
+  const room = await getRoom(roomId);
   if (!room) return null;
 
   const serialized = serializeRoom(room);
   let roundState = null;
 
   if (room.sessionId) {
-    const session = getSessionLocal(room.sessionId);
+    const session = await getSession(room.sessionId);
     if (session?.roundState) {
       const rs = session.roundState;
       const revealedHints: string[] = [];
@@ -81,64 +122,54 @@ export function getRoomState(roomId: string) {
   return { room: serialized, roundState, currentRound: 0, totalRounds: 0 };
 }
 
-function clearTimers(sessionId: string) {
-  const ht = hintTimers.get(sessionId);
-  if (ht) {
-    clearInterval(ht);
-    hintTimers.delete(sessionId);
-  }
-  const rt = roundTimers.get(sessionId);
-  if (rt) {
-    clearTimeout(rt);
-    roundTimers.delete(sessionId);
-  }
-}
+// True Serverless Game Loop (Lazy Evaluation)
+async function tickSession(roomId: string) {
+  const room = await getRoom(roomId);
+  if (!room || !room.sessionId) return;
+  
+  const session = await getSession(room.sessionId);
+  if (!session || !session.roundState) return;
 
-function scheduleHints(roomId: string, sessionId: string, timerSeconds: number) {
-  const interval = (timerSeconds * 1000) / 3;
-  let hintCount = 0;
-  const timer = setInterval(() => {
-    hintCount++;
-    if (hintCount > 2) {
-      clearInterval(timer);
-      hintTimers.delete(sessionId);
-      return;
-    }
+  const rs = session.roundState;
+  const elapsed = (Date.now() - rs.startedAt) / 1000;
 
-    const session = getSessionLocal(sessionId);
-    if (!session) return;
-    const result = revealHint(session);
-    if (result) {
-      pushEvent(roomId, {
+  let stateChanged = false;
+
+  // 1. Check for Hints
+  const hintInterval = rs.timerSeconds * 0.2;
+  const expectedHints = Math.min(3, Math.floor(elapsed / hintInterval));
+  
+  if (expectedHints > rs.revealedHints) {
+    // Reveal all pending hints
+    while (rs.revealedHints < expectedHints) {
+      rs.revealedHints++;
+      await pushEvent(roomId, {
         type: "hint_revealed",
-        hintIndex: result.hintIndex,
-        hint: result.hint,
+        hintIndex: rs.revealedHints,
+        hint: rs.entity.hints[rs.revealedHints - 1],
       });
+      stateChanged = true;
     }
-  }, interval);
+  }
 
-  hintTimers.set(sessionId, timer);
+  // 2. Check for Round End
+  if (elapsed >= rs.timerSeconds) {
+    await handleRoundEndInner(roomId, session);
+    stateChanged = true;
+  }
+
+  if (stateChanged) {
+    await saveSession(session);
+  }
 }
 
-function scheduleRoundEnd(roomId: string, sessionId: string, timerSeconds: number) {
-  const timer = setTimeout(() => {
-    roundTimers.delete(sessionId);
-    handleRoundEnd(roomId, sessionId);
-  }, timerSeconds * 1000);
-
-  roundTimers.set(sessionId, timer);
-}
-
-function handleRoundEnd(roomId: string, sessionId: string) {
-  clearTimers(sessionId);
-
-  const session = getSessionLocal(sessionId);
-  if (!session) return;
-
+async function handleRoundEndInner(roomId: string, session: GameSession) {
+  if (!session.roundState) return;
+  
   const result = endRound(session);
   if (!result) return;
 
-  pushEvent(roomId, {
+  await pushEvent(roomId, {
     type: "round_end",
     scores: result.scores,
     correctAnswer: result.correctAnswer,
@@ -147,32 +178,34 @@ function handleRoundEnd(roomId: string, sessionId: string) {
 
   if (isGameOver(session)) {
     const finalScores = getLeaderboard(session);
-    pushEvent(roomId, { type: "game_end", finalScores });
-    setRoomStatus(roomId, "finished");
-    deleteRoomApiKey(roomId);
+    await pushEvent(roomId, { type: "game_end", finalScores });
+    await setRoomStatus(roomId, "finished");
+    await deleteRoomApiKey(roomId);
   }
 }
 
-export function startRound(roomId: string, sessionId: string) {
-  const session = getSessionLocal(sessionId);
+export async function startRound(roomId: string, sessionId: string) {
+  const session = await getSession(sessionId);
   if (!session) return;
-  const room = getRoom(roomId);
+  const room = await getRoom(roomId);
   if (!room) return;
 
   const roundState = startNextRound(session, room.timerSeconds);
   if (!roundState) {
     const finalScores = getLeaderboard(session);
-    pushEvent(roomId, { type: "game_end", finalScores });
-    setRoomStatus(roomId, "finished");
+    await pushEvent(roomId, { type: "game_end", finalScores });
+    await setRoomStatus(roomId, "finished");
     return;
   }
+
+  await saveSession(session);
 
   const revealedHints: string[] = [];
   for (let i = 0; i < roundState.revealedHints; i++) {
     revealedHints.push(roundState.entity.hints[i]);
   }
 
-  pushEvent(roomId, {
+  await pushEvent(roomId, {
     type: "round_start",
     round: {
       roundNumber: roundState.roundNumber,
@@ -185,20 +218,17 @@ export function startRound(roomId: string, sessionId: string) {
     roundNumber: session.currentRound,
     totalRounds: session.totalRounds,
   });
-
-  scheduleHints(roomId, sessionId, room.timerSeconds);
-  scheduleRoundEnd(roomId, sessionId, room.timerSeconds);
 }
 
 export async function startGame(roomId: string, apiKey: string) {
-  const room = getRoom(roomId);
+  const room = await getRoom(roomId);
   if (!room) {
-    pushEvent(roomId, { type: "error", message: "Room not found" });
+    await pushEvent(roomId, { type: "error", message: "Room not found" });
     return;
   }
 
-  setRoomStatus(roomId, "generating");
-  pushEvent(roomId, { type: "room_state", room: serializeRoom(room) });
+  await setRoomStatus(roomId, "generating");
+  await pushEvent(roomId, { type: "room_state", room: serializeRoom(room) });
 
   try {
     const dataset = await generateGameDataset(apiKey, room.topic, room.difficulty, room.totalRounds);
@@ -214,43 +244,48 @@ export async function startGame(roomId: string, apiKey: string) {
       session.players.set(id, { ...player, score: 0 });
     }
 
-    sessions.set(session.id, session);
-    setRoomSession(roomId, session.id);
-    setRoomStatus(roomId, "playing");
+    await saveSession(session);
+    await setRoomSession(roomId, session.id);
+    await setRoomStatus(roomId, "playing");
 
-    pushEvent(roomId, { type: "game_started", sessionId: session.id });
-    startRound(roomId, session.id);
+    await pushEvent(roomId, { type: "game_started", sessionId: session.id });
+    await startRound(roomId, session.id);
   } catch (err: unknown) {
-    setRoomStatus(roomId, "lobby");
+    await setRoomStatus(roomId, "lobby");
     const message = err instanceof Error ? err.message : "Failed to generate game";
-    pushEvent(roomId, { type: "error", message });
+    await pushEvent(roomId, { type: "error", message });
   }
 }
 
-export function handleGuess(roomId: string, playerId: string, guess: string) {
-  const room = getRoom(roomId);
+export async function handleGuess(roomId: string, playerId: string, guess: string) {
+  const room = await getRoom(roomId);
   if (!room?.sessionId) return;
 
-  const session = getSessionLocal(room.sessionId);
+  const session = await getSession(room.sessionId);
   if (!session) return;
 
+  const player = session.players.get(playerId);
   const result = processGuess(session, playerId, guess);
   if (!result) return;
 
-  pushEvent(roomId, {
+  await pushEvent(roomId, {
     type: "guess_result",
     playerId,
+    playerName: player?.name || "Unknown",
+    guess,
     correct: result.correct,
     guessesLeft: result.guessesLeft,
   });
 
   if (isRoundOver(session)) {
-    handleRoundEnd(roomId, room.sessionId);
+    await handleRoundEndInner(roomId, session);
   }
+
+  await saveSession(session);
 }
 
-export function nextRound(roomId: string) {
-  const room = getRoom(roomId);
+export async function nextRound(roomId: string) {
+  const room = await getRoom(roomId);
   if (!room?.sessionId) return;
-  startRound(roomId, room.sessionId);
+  await startRound(roomId, room.sessionId);
 }

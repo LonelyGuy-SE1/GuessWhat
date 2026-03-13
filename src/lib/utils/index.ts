@@ -27,6 +27,7 @@ export function serializeRoom(room: Room): SerializedRoom {
     players: serializePlayers(room.players),
     sessionId: room.sessionId,
     status: room.status,
+    createdAt: room.createdAt,
   };
 }
 
@@ -65,10 +66,20 @@ export function normalizeGuess(guess: string): string {
   return guess.toLowerCase().replace(/[^a-z0-9\s]/g, "").trim();
 }
 
-export function checkGuess(guess: string, answer: string): boolean {
+export function checkGuess(guess: string, answer: string, acceptedAnswers?: string[]): boolean {
   const g = normalizeGuess(guess);
   const a = normalizeGuess(answer);
   if (g === a) return true;
+  
+  if (acceptedAnswers && acceptedAnswers.length > 0) {
+    for (const alt of acceptedAnswers) {
+      const altNorm = normalizeGuess(alt);
+      if (g === altNorm) return true;
+      if (altNorm.includes(g) && g.length >= altNorm.length * 0.6) return true;
+      if (g.includes(altNorm) && altNorm.length >= g.length * 0.6) return true;
+    }
+  }
+
   // Allow partial match if sufficiently close
   if (a.includes(g) && g.length >= a.length * 0.6) return true;
   if (g.includes(a) && a.length >= g.length * 0.6) return true;

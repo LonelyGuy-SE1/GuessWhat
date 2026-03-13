@@ -5,6 +5,8 @@ import { getRoomApiKey, setRoomApiKey } from "@/lib/room/api-key-store";
 import { startGame, handleGuess, nextRound, pushEvent } from "@/lib/room/multiplayer-engine";
 import type { RoomSettings } from "@/lib/types";
 
+export const maxDuration = 60; // Allow 60 seconds for AI dataset generation on Vercel
+
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ roomId: string }> }
@@ -24,12 +26,12 @@ export async function POST(
     apiKey?: string;
   };
 
-  let room = getRoom(roomId);
+  let room = await getRoom(roomId);
 
   if (!room && action === "restore" && roomSnapshot) {
-    const restored = createRoom(roomSnapshot.settings, roomSnapshot.hostName, roomId);
+    const restored = await createRoom(roomSnapshot.settings, roomSnapshot.hostName, roomId);
     if (roomSnapshot.apiKey) {
-      setRoomApiKey(restored.room.id, roomSnapshot.apiKey);
+      await setRoomApiKey(restored.room.id, roomSnapshot.apiKey);
     }
     room = restored.room;
     return NextResponse.json({ playerId: restored.hostPlayer.id, room: serializeRoom(room) });
@@ -45,7 +47,7 @@ export async function POST(
         const existing = room.players.get(playerId);
         if (existing) {
           existing.connected = true;
-          pushEvent(roomId, { type: "room_state", room: serializeRoom(room) });
+          await pushEvent(roomId, { type: "room_state", room: serializeRoom(room) });
           return NextResponse.json({ playerId: existing.id, room: serializeRoom(room) });
         }
       }
@@ -54,12 +56,12 @@ export async function POST(
         return NextResponse.json({ error: "Missing player name" }, { status: 400 });
       }
 
-      const result = joinRoom(roomId, playerName);
+      const result = await joinRoom(roomId, playerName);
       if (!result) {
         return NextResponse.json({ error: "Cannot join room" }, { status: 400 });
       }
 
-      pushEvent(roomId, {
+      await pushEvent(roomId, {
         type: "player_joined",
         player: {
           id: result.player.id,
@@ -69,7 +71,7 @@ export async function POST(
         },
       });
 
-      pushEvent(roomId, { type: "room_state", room: serializeRoom(result.room) });
+      await pushEvent(roomId, { type: "room_state", room: serializeRoom(result.room) });
 
       return NextResponse.json({ playerId: result.player.id, room: serializeRoom(result.room) });
     }
@@ -79,16 +81,22 @@ export async function POST(
         return NextResponse.json({ error: "Only the host can start the game" }, { status: 403 });
       }
 
-      const storedKey = getRoomApiKey(roomId) || apiKey;
+      const storedKey = (await getRoomApiKey(roomId)) || apiKey;
       if (!storedKey) {
         return NextResponse.json({ error: "No API key set for this room" }, { status: 400 });
       }
 
-      if (!getRoomApiKey(roomId) && storedKey) {
-        setRoomApiKey(roomId, storedKey);
+      const currentKey = await getRoomApiKey(roomId);
+      if (!currentKey && storedKey) {
+        await setRoomApiKey(roomId, storedKey);
       }
 
-      startGame(roomId, storedKey);
+      // Await generation so Vercel does not kill the process
+      try {
+        await startGame(roomId, storedKey);
+      } catch (err) {
+        console.error(err);
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -97,7 +105,12 @@ export async function POST(
         return NextResponse.json({ error: "Missing guess" }, { status: 400 });
       }
 
-      handleGuess(roomId, playerId, guess);
+      // Mutating actions must be awaited so KV resolves before return
+      try {
+        await handleGuess(roomId, playerId, guess);
+      } catch (err) {
+        console.error(err);
+      }
       return NextResponse.json({ ok: true });
     }
 
@@ -105,7 +118,11 @@ export async function POST(
       if (!playerId || room.hostId !== playerId) {
         return NextResponse.json({ error: "Only the host can advance rounds" }, { status: 403 });
       }
-      nextRound(roomId);
+      try {
+        await nextRound(roomId);
+      } catch (err) {
+        console.error(err);
+      }
       return NextResponse.json({ ok: true });
     }
   }

@@ -24,7 +24,7 @@ export default function SoloPage() {
   const [topic, setTopic] = useState("");
   const [playerName, setPlayerName] = useState("");
   const [difficulty, setDifficulty] = useState<Difficulty>("medium");
-  const [rounds, setRounds] = useState(5);
+  const [rounds, setRounds] = useState<number | "">(5);
   const [error, setError] = useState<string | null>(null);
   const [dataset, setDataset] = useState<GameDataset | null>(null);
   const [progress, setProgress] = useState<Progress>({
@@ -51,7 +51,7 @@ export default function SoloPage() {
     setProgress({
       phase: "entities",
       current: 0,
-      total: rounds,
+      total: rounds || 5,
       message: "Starting...",
     });
 
@@ -60,13 +60,13 @@ export default function SoloPage() {
         apiKey,
         topic,
         difficulty,
-        rounds,
+        rounds || 5,
         (p: GenerationProgress) => {
           if (abortedRef.current) return;
           setProgress({
             phase: p.phase,
             current: p.entitiesReady,
-            total: p.entitiesTotal || rounds,
+            total: p.entitiesTotal || rounds || 5,
             message: p.message,
           });
         }
@@ -134,7 +134,7 @@ export default function SoloPage() {
               <input
                 type="number"
                 value={rounds}
-                onChange={(e) => setRounds(parseInt(e.target.value) || 5)}
+                onChange={(e) => setRounds(e.target.value === "" ? "" : parseInt(e.target.value) || 1)}
                 min={1}
                 max={20}
                 disabled={phase === "generating"}
@@ -184,7 +184,7 @@ export default function SoloPage() {
       dataset={dataset}
       playerName={playerName}
       difficulty={difficulty}
-      rounds={rounds}
+      rounds={rounds || 5}
     />
   );
 }

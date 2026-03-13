@@ -16,20 +16,51 @@ export interface GenerationProgress {
 }
 
 /**
+ * Safely verify if an image URL is alive without hitting CORS issues in browser
+ */
+async function verifyImageUrl(url: string): Promise<boolean> {
+  if (typeof window !== "undefined") {
+    return new Promise((resolve) => {
+      const img = new window.Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = url;
+    });
+  } else {
+    try {
+      const res = await fetch(url, { method: "HEAD" });
+      return res.ok && (res.headers.get("content-type")?.startsWith("image/") ?? true);
+    } catch {
+      return false;
+    }
+  }
+}
+
+/**
  * Generate a single entity's image and hints in parallel
  */
 async function processEntity(
   apiKey: string,
-  raw: { name: string; description: string; category: string; year?: string },
+  raw: { name: string; description: string; category: string; year?: string; acceptedAnswers: string[]; imageUrl?: string },
   difficulty: Difficulty
 ): Promise<Entity> {
+  // If the LLM successfully retrieved a real world image URL from its training data, skip generation to save cost
+  const imagePromise = (async () => {
+    if (raw.imageUrl && raw.imageUrl.startsWith("http")) {
+      const isValid = await verifyImageUrl(raw.imageUrl);
+      if (isValid) return raw.imageUrl;
+    }
+    // Fallback to generating the image
+    return generateEntityImage(apiKey, raw.name, raw.description, raw.category);
+  })();
+
   // Run image and hints generation in parallel for this entity
   const [imageUrl, hints] = await Promise.all([
-    generateEntityImage(apiKey, raw.name, raw.description, raw.category),
+    imagePromise,
     generateHints(apiKey, raw.name, raw.description, raw.category, difficulty),
   ]);
 
-  return rawEntityToEntity(raw, generateId(), imageUrl, hints);
+  return rawEntityToEntity(raw as any, generateId(), imageUrl, hints);
 }
 
 /**

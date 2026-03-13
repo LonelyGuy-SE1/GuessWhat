@@ -25,10 +25,9 @@ export async function POST(req: NextRequest) {
     maxPlayers: Math.min(Math.max(settings.maxPlayers || 20, 2), 100),
   };
 
-  const { room, hostPlayer } = createRoom(validSettings, hostName);
+  const { room, hostPlayer } = await createRoom(validSettings, hostName);
 
-  // Store API key in memory (never persisted, never logged)
-  setRoomApiKey(room.id, apiKey);
+  await setRoomApiKey(room.id, apiKey);
 
   return NextResponse.json({
     room: serializeRoom(room),
@@ -37,7 +36,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET() {
-  const rooms = listRooms()
+  const rooms = (await listRooms())
     .filter((r) => r.status === "lobby")
     .map((r) => serializeRoom(r));
 
