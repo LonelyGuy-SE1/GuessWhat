@@ -58,11 +58,13 @@ export default function RoomPage() {
   const playerIdRef = useRef<string | null>(null);
   const phaseRef = useRef<RoomPhase>("connecting");
   const isHostRef = useRef(false);
+  const roundNumberRef = useRef(0);
 
   // Keep refs in sync with state
   useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
   useEffect(() => { isHostRef.current = isHost; }, [isHost]);
+  useEffect(() => { roundNumberRef.current = roundNumber; }, [roundNumber]);
 
   const handleEvent = useCallback(
     (msg: WSServerMessage) => {
@@ -290,11 +292,6 @@ export default function RoomPage() {
 
         if (data.room) {
           setRoom(data.room);
-          if (phaseRef.current === "connecting") {
-            if (data.room.status === "lobby") setPhase("lobby");
-            else if (data.room.status === "generating") setPhase("generating");
-            else if (data.room.status === "playing") setPhase("playing");
-          }
         }
 
         if (data.events && data.events.length > 0) {
@@ -305,6 +302,44 @@ export default function RoomPage() {
 
         if (data.cursor !== undefined) {
           cursorRef.current = data.cursor;
+        }
+
+        // ── State reconciliation from snapshot ──
+        // If the client missed events (race condition, network hiccup), the
+        // snapshot returned on every poll is the source of truth. Reconcile
+        // client phase with what the server actually shows.
+        const cp = phaseRef.current;
+
+        if (data.room) {
+          // Room phase overrides for lobby / generating / initial connect
+          if (cp === "connecting" || (cp !== "playing" && cp !== "round_end" && cp !== "game_over")) {
+            if (data.room.status === "lobby") setPhase("lobby");
+            else if (data.room.status === "generating") setPhase("generating");
+            else if (data.room.status === "playing" || data.room.status === "finished") {
+              // Will be refined by roundState check below
+            }
+          }
+
+          if (data.room.status === "finished" && cp !== "game_over") {
+            setPhase("game_over");
+          }
+        }
+
+        // Snapshot shows an active round but client is stuck (missed round_start)
+        if (data.roundState && (cp === "round_end" || cp === "generating" || cp === "connecting" || cp === "lobby")) {
+          const snap = data.roundState;
+          // Only recover if this is actually a different round than what we have
+          if (snap.roundNumber !== roundNumberRef.current) {
+            setRoundData(snap);
+            setRoundNumber(snap.roundNumber);
+            setTotalRounds(data.totalRounds || snap.roundNumber);
+            setHints(snap.hints || []);
+            setGuessesLeft(3);
+            setRoundResult(null);
+            setGuessLog([]);
+            startedAtRef.current = snap.startedAt;
+            setPhase("playing");
+          }
         }
       } catch {
         setConnected(false);

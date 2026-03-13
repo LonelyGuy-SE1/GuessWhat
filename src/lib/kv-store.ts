@@ -110,3 +110,42 @@ export async function kvKeys(pattern: string): Promise<string[]> {
   }
   return keys;
 }
+
+// ─── List operations (atomic append via RPUSH) ───
+
+/**
+ * Atomically append a value to a Redis list. No read-modify-write race.
+ */
+export async function kvListAppend(key: string, value: any, ttlSec: number): Promise<void> {
+  if (isKvEnabled) {
+    try {
+      const redis = getRedis();
+      await redis.rpush(key, JSON.stringify(value));
+      await redis.expire(key, ttlSec);
+    } catch (err) {
+      console.error(`[kv-store] kvListAppend("${key}") failed:`, err);
+    }
+    return;
+  }
+
+  if (!memoryStore.has(key)) memoryStore.set(key, []);
+  memoryStore.get(key).push(value);
+}
+
+/**
+ * Read list items from `start` index to the end.
+ */
+export async function kvListRange(key: string, start: number): Promise<any[]> {
+  if (isKvEnabled) {
+    try {
+      const items = await getRedis().lrange(key, start, -1);
+      return items.map((item) => JSON.parse(item));
+    } catch (err) {
+      console.error(`[kv-store] kvListRange("${key}", ${start}) failed:`, err);
+      return [];
+    }
+  }
+
+  const arr = memoryStore.get(key) || [];
+  return arr.slice(start);
+}

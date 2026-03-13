@@ -12,7 +12,7 @@ import {
 import { generateGameDataset } from "@/lib/ai/orchestrator";
 import { serializeRoom, answerToPattern } from "@/lib/utils";
 import { deleteRoomApiKey } from "@/lib/room/api-key-store";
-import { kvGet, kvSet } from "@/lib/kv-store";
+import { kvGet, kvSet, kvListAppend, kvListRange } from "@/lib/kv-store";
 
 // Map serialization helpers
 function serializeSession(session: GameSession): any {
@@ -51,24 +51,15 @@ async function getSession(sessionId: string): Promise<GameSession | null> {
 }
 
 export async function pushEvent(roomId: string, msg: WSServerMessage) {
-  const queue: WSServerMessage[] = (await kvGet<WSServerMessage[]>(`events:${roomId}`)) || [];
-
-  queue.push(msg);
-  if (queue.length > 100) queue.splice(0, queue.length - 100);
-
-  await kvSet(`events:${roomId}`, queue, EVENTS_TTL);
+  await kvListAppend(`events:${roomId}`, msg, EVENTS_TTL);
 }
 
 export async function getEvents(roomId: string, since: number): Promise<{ events: WSServerMessage[]; cursor: number }> {
   // Tick time progress before returning events (serverless game loop)
   await tickSession(roomId);
 
-  const queue: WSServerMessage[] = (await kvGet<WSServerMessage[]>(`events:${roomId}`)) || [];
-
-  if (since >= queue.length) {
-    return { events: [], cursor: queue.length };
-  }
-  return { events: queue.slice(since), cursor: queue.length };
+  const events = await kvListRange(`events:${roomId}`, since);
+  return { events, cursor: since + events.length };
 }
 
 export async function getRoomState(roomId: string) {
@@ -77,28 +68,34 @@ export async function getRoomState(roomId: string) {
 
   const serialized = serializeRoom(room);
   let roundState = null;
+  let currentRound = 0;
+  let totalRounds = 0;
 
   if (room.sessionId) {
     const session = await getSession(room.sessionId);
-    if (session?.roundState) {
-      const rs = session.roundState;
-      const revealedHints: string[] = [];
-      for (let i = 0; i < rs.revealedHints; i++) {
-        revealedHints.push(rs.entity.hints[i]);
+    if (session) {
+      currentRound = session.currentRound;
+      totalRounds = session.totalRounds;
+      if (session.roundState) {
+        const rs = session.roundState;
+        const revealedHints: string[] = [];
+        for (let i = 0; i < rs.revealedHints; i++) {
+          revealedHints.push(rs.entity.hints[i]);
+        }
+        roundState = {
+          roundNumber: rs.roundNumber,
+          imageUrl: rs.entity.imageUrl,
+          startedAt: rs.startedAt,
+          timerSeconds: rs.timerSeconds,
+          revealedHints: rs.revealedHints,
+          hints: revealedHints,
+          answerPattern: answerToPattern(rs.entity.name),
+        };
       }
-      roundState = {
-        roundNumber: rs.roundNumber,
-        imageUrl: rs.entity.imageUrl,
-        startedAt: rs.startedAt,
-        timerSeconds: rs.timerSeconds,
-        revealedHints: rs.revealedHints,
-        hints: revealedHints,
-        answerPattern: answerToPattern(rs.entity.name),
-      };
     }
   }
 
-  return { room: serialized, roundState, currentRound: 0, totalRounds: 0 };
+  return { room: serialized, roundState, currentRound, totalRounds };
 }
 
 // True Serverless Game Loop (Lazy Evaluation)
