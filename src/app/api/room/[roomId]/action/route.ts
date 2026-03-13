@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getRoom, joinRoom, createRoom } from "@/lib/room/manager";
+import { getRoom, joinRoom, createRoom, saveRoom } from "@/lib/room/manager";
 import { serializeRoom } from "@/lib/utils";
 import { getRoomApiKey, setRoomApiKey } from "@/lib/room/api-key-store";
 import { startGame, handleGuess, nextRound, pushEvent } from "@/lib/room/multiplayer-engine";
@@ -47,6 +47,7 @@ export async function POST(
         const existing = room.players.get(playerId);
         if (existing) {
           existing.connected = true;
+          await saveRoom(room); // Persist connected status change
           await pushEvent(roomId, { type: "room_state", room: serializeRoom(room) });
           return NextResponse.json({ playerId: existing.id, room: serializeRoom(room) });
         }

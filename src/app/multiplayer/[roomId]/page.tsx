@@ -54,9 +54,20 @@ export default function RoomPage() {
   const restoringRef = useRef(false);
   const roomSnapshotRef = useRef<{ settings: unknown; hostName: string; apiKey: string } | null>(null);
   const joinedRef = useRef(false);
+  // Use refs for values that polling needs but shouldn't cause re-subscription
+  const playerIdRef = useRef<string | null>(null);
+  const phaseRef = useRef<RoomPhase>("connecting");
+  const isHostRef = useRef(false);
+
+  // Keep refs in sync with state
+  useEffect(() => { playerIdRef.current = playerId; }, [playerId]);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
+  useEffect(() => { isHostRef.current = isHost; }, [isHost]);
 
   const handleEvent = useCallback(
     (msg: WSServerMessage) => {
+      const currentPlayerId = playerIdRef.current;
+
       switch (msg.type) {
         case "room_state":
           setRoom(msg.room);
@@ -117,7 +128,7 @@ export default function RoomPage() {
             guess: msg.guess,
             correct: msg.correct,
           }]);
-          if (msg.playerId === playerId) {
+          if (msg.playerId === currentPlayerId) {
             setGuessesLeft(msg.guessesLeft);
           }
           break;
@@ -146,9 +157,10 @@ export default function RoomPage() {
           break;
       }
     },
-    [playerId],
+    [], // No deps - uses refs for mutable values
   );
 
+  // Load session data from sessionStorage
   useEffect(() => {
     const stored = sessionStorage.getItem(`room_${roomId}`);
     if (!stored) {
@@ -166,6 +178,7 @@ export default function RoomPage() {
     }
   }, [roomId]);
 
+  // Join or restore room on mount
   useEffect(() => {
     if (!playerName || joinedRef.current) return;
 
@@ -177,11 +190,11 @@ export default function RoomPage() {
           body: JSON.stringify({
             action: "join",
             playerName,
-            playerId,
+            playerId: playerIdRef.current,
           }),
         });
 
-        if (res.status === 404 && isHost && roomSnapshotRef.current && !restoringRef.current) {
+        if (res.status === 404 && isHostRef.current && roomSnapshotRef.current && !restoringRef.current) {
           restoringRef.current = true;
           const restoreRes = await fetch(`/api/room/${roomId}/action`, {
             method: "POST",
@@ -210,7 +223,7 @@ export default function RoomPage() {
 
         if (!res.ok) return;
         const data = await res.json();
-        if (!playerId) {
+        if (!playerIdRef.current) {
           setPlayerId(data.playerId);
           const storedData = sessionStorage.getItem(`room_${roomId}`);
           if (storedData) {
@@ -222,7 +235,7 @@ export default function RoomPage() {
         joinedRef.current = true;
         if (data.room) {
           setRoom(data.room);
-          if (phase === "connecting") {
+          if (phaseRef.current === "connecting") {
             setPhase(data.room.status === "lobby" ? "lobby" : data.room.status === "generating" ? "generating" : "playing");
           }
         }
@@ -232,8 +245,9 @@ export default function RoomPage() {
     }
 
     joinOrRestore();
-  }, [roomId, playerName, playerId]);
+  }, [roomId, playerName]); // Removed playerId dep - use ref instead
 
+  // Polling loop - only depends on roomId and handleEvent (both stable)
   useEffect(() => {
     async function poll() {
       try {
@@ -246,7 +260,7 @@ export default function RoomPage() {
 
         if (data.roomLost) {
           setConnected(false);
-          if (isHost && roomSnapshotRef.current && !restoringRef.current) {
+          if (isHostRef.current && roomSnapshotRef.current && !restoringRef.current) {
             restoringRef.current = true;
             try {
               const restoreRes = await fetch(`/api/room/${roomId}/action`, {
@@ -276,7 +290,7 @@ export default function RoomPage() {
 
         if (data.room) {
           setRoom(data.room);
-          if (phase === "connecting") {
+          if (phaseRef.current === "connecting") {
             if (data.room.status === "lobby") setPhase("lobby");
             else if (data.room.status === "generating") setPhase("generating");
             else if (data.room.status === "playing") setPhase("playing");
@@ -303,13 +317,13 @@ export default function RoomPage() {
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [roomId, handleEvent, phase, isHost]);
+  }, [roomId, handleEvent]); // Stable deps only - no phase, isHost, or playerId
 
   function postAction(action: string, payload?: Record<string, unknown>) {
     return fetch(`/api/room/${roomId}/action`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action, playerId, ...payload }),
+      body: JSON.stringify({ action, playerId: playerIdRef.current, ...payload }),
     });
   }
 
@@ -416,7 +430,7 @@ export default function RoomPage() {
           onGuess={handleGuess}
           onTimerExpire={() => {}}
           roundResult={roundResult}
-          onNextRound={handleNextRound}
+          onNextRound={isHost ? handleNextRound : undefined}
           gameOver={false}
           disabled={!connected}
         />

@@ -12,7 +12,7 @@ import {
 import { generateGameDataset } from "@/lib/ai/orchestrator";
 import { serializeRoom } from "@/lib/utils";
 import { deleteRoomApiKey } from "@/lib/room/api-key-store";
-import { kvGet, kvSet, isKvEnabled } from "@/lib/kv-store";
+import { kvGet, kvSet } from "@/lib/kv-store";
 
 // Map serialization helpers
 function serializeSession(session: GameSession): any {
@@ -37,55 +37,33 @@ function deserializeSession(data: any): GameSession {
   };
 }
 
-const g = global as typeof globalThis & {
-  __guesswhat_sessions?: Map<string, GameSession>;
-  __guesswhat_events?: Map<string, WSServerMessage[]>;
-};
-if (!g.__guesswhat_sessions) g.__guesswhat_sessions = new Map();
-if (!g.__guesswhat_events) g.__guesswhat_events = new Map();
-const fallbackSessions = g.__guesswhat_sessions;
-const fallbackEvents = g.__guesswhat_events;
+const SESSION_TTL = 3 * 3600;
+const EVENTS_TTL = 3 * 3600;
 
 async function saveSession(session: GameSession) {
-  await kvSet(`session:${session.id}`, serializeSession(session), 3 * 3600);
-  if (!isKvEnabled) fallbackSessions.set(session.id, session);
+  await kvSet(`session:${session.id}`, serializeSession(session), SESSION_TTL);
 }
 
 async function getSession(sessionId: string): Promise<GameSession | null> {
   const data = await kvGet<any>(`session:${sessionId}`);
   if (data) return deserializeSession(data);
-  if (!isKvEnabled) return fallbackSessions.get(sessionId) || null;
   return null;
 }
 
 export async function pushEvent(roomId: string, msg: WSServerMessage) {
-  let queue: WSServerMessage[] = [];
-  if (isKvEnabled) {
-    queue = (await kvGet<WSServerMessage[]>(`events:${roomId}`)) || [];
-  } else {
-    queue = fallbackEvents.get(roomId) || [];
-  }
+  const queue: WSServerMessage[] = (await kvGet<WSServerMessage[]>(`events:${roomId}`)) || [];
 
   queue.push(msg);
   if (queue.length > 100) queue.splice(0, queue.length - 100);
 
-  if (isKvEnabled) {
-    await kvSet(`events:${roomId}`, queue, 3 * 3600);
-  } else {
-    fallbackEvents.set(roomId, queue);
-  }
+  await kvSet(`events:${roomId}`, queue, EVENTS_TTL);
 }
 
 export async function getEvents(roomId: string, since: number): Promise<{ events: WSServerMessage[]; cursor: number }> {
-  // Tick time progress before returning events to make KV completely serverless
+  // Tick time progress before returning events (serverless game loop)
   await tickSession(roomId);
 
-  let queue: WSServerMessage[] = [];
-  if (isKvEnabled) {
-    queue = (await kvGet<WSServerMessage[]>(`events:${roomId}`)) || [];
-  } else {
-    queue = fallbackEvents.get(roomId) || [];
-  }
+  const queue: WSServerMessage[] = (await kvGet<WSServerMessage[]>(`events:${roomId}`)) || [];
 
   if (since >= queue.length) {
     return { events: [], cursor: queue.length };
@@ -123,6 +101,7 @@ export async function getRoomState(roomId: string) {
 }
 
 // True Serverless Game Loop (Lazy Evaluation)
+// Called on every poll to advance game state based on elapsed time
 async function tickSession(roomId: string) {
   const room = await getRoom(roomId);
   if (!room || !room.sessionId) return;
@@ -135,25 +114,25 @@ async function tickSession(roomId: string) {
 
   let stateChanged = false;
 
-  // 1. Check for Hints
+  // 1. Check for time-based hint reveals
   const hintInterval = rs.timerSeconds * 0.2;
   const expectedHints = Math.min(3, Math.floor(elapsed / hintInterval));
   
   if (expectedHints > rs.revealedHints) {
-    // Reveal all pending hints
     while (rs.revealedHints < expectedHints) {
+      const hintIndex = rs.revealedHints; // 0-based index for the client
       rs.revealedHints++;
       await pushEvent(roomId, {
         type: "hint_revealed",
-        hintIndex: rs.revealedHints,
-        hint: rs.entity.hints[rs.revealedHints - 1],
+        hintIndex, // 0-based: matches array index on client
+        hint: rs.entity.hints[hintIndex],
       });
       stateChanged = true;
     }
   }
 
-  // 2. Check for Round End
-  if (elapsed >= rs.timerSeconds) {
+  // 2. Check for timer expiration -> end round
+  if (elapsed >= rs.timerSeconds && session.roundState) {
     await handleRoundEndInner(roomId, session);
     stateChanged = true;
   }
@@ -164,6 +143,7 @@ async function tickSession(roomId: string) {
 }
 
 async function handleRoundEndInner(roomId: string, session: GameSession) {
+  // Guard: if round already ended (e.g., by a concurrent request), bail out
   if (!session.roundState) return;
   
   const result = endRound(session);
@@ -228,7 +208,11 @@ export async function startGame(roomId: string, apiKey: string) {
   }
 
   await setRoomStatus(roomId, "generating");
-  await pushEvent(roomId, { type: "room_state", room: serializeRoom(room) });
+  // Re-fetch room after status update to get fresh state for serialization
+  const updatedRoom = await getRoom(roomId);
+  if (updatedRoom) {
+    await pushEvent(roomId, { type: "room_state", room: serializeRoom(updatedRoom) });
+  }
 
   try {
     const dataset = await generateGameDataset(apiKey, room.topic, room.difficulty, room.totalRounds);
@@ -240,7 +224,11 @@ export async function startGame(roomId: string, apiKey: string) {
       room.timerSeconds
     );
 
-    for (const [id, player] of room.players) {
+    // Re-fetch room to get latest player list (players may have joined during generation)
+    const latestRoom = await getRoom(roomId);
+    const players = latestRoom ? latestRoom.players : room.players;
+    
+    for (const [id, player] of players) {
       session.players.set(id, { ...player, score: 0 });
     }
 

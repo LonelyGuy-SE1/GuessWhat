@@ -35,7 +35,7 @@ interface GameScreenProps {
       roundScore: number;
     }[];
   } | null;
-  onNextRound: () => void;
+  onNextRound?: () => void;
   gameOver: boolean;
   disabled?: boolean;
   previousGuesses?: { guess: string; correct: boolean }[];
@@ -99,7 +99,7 @@ export default function GameScreen({
             showRoundScore
           />
 
-          {!gameOver && (
+          {!gameOver && onNextRound && (
             <button
               onClick={onNextRound}
               className="w-full py-3 bg-amber-500 text-white font-bold rounded-xl hover:bg-amber-600 transition-colors"
