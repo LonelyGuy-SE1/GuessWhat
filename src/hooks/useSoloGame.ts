@@ -98,17 +98,18 @@ export function useSoloGame({ dataset, playerName, difficulty, rounds }: UseSolo
     setPhase("playing");
     setLoading(false);
 
+    // Reveal hints at 20%, 40%, and 60% of the round timer
     const interval = (timerSeconds * 1000) * 0.2;
     let count = 0;
     hintTimerRef.current = setInterval(() => {
       count++;
-      if (count > 2) {
-        if (hintTimerRef.current) clearInterval(hintTimerRef.current);
-        return;
-      }
       const result = revealHint(session);
       if (result) {
         setHints((prev) => [...prev, result.hint]);
+      }
+      // Stop after all 3 hints have been revealed
+      if (count >= 3) {
+        if (hintTimerRef.current) clearInterval(hintTimerRef.current);
       }
     }, interval);
   }, [difficulty]);

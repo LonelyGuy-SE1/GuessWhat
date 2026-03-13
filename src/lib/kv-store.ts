@@ -1,87 +1,106 @@
-import { kv } from "@vercel/kv";
+import Redis from "ioredis";
 
-// Safely checks if KV is configured (Vercel injects this automatically when KV is linked)
-export const isKvEnabled = !!process.env.KV_REST_API_URL;
+// Redis is enabled when a connection URL is provided.
+// Vercel injects KV_REDIS_URL when you link a Redis store to the project.
+export const isKvEnabled = !!process.env.KV_REDIS_URL;
 
-// In-memory store acts as a fast local cache within a single serverless invocation.
-// On Vercel with KV enabled, this ensures reads within the same request are consistent
-// after writes, without waiting for KV round-trips.
-const g = global as typeof globalThis & { __guesswhat_kv_mem?: Map<string, any> };
+// Reuse a single Redis connection across warm serverless invocations.
+// ioredis handles reconnection and buffering automatically.
+const g = global as typeof globalThis & {
+  __guesswhat_redis?: Redis;
+  __guesswhat_kv_mem?: Map<string, any>;
+};
+
+function getRedis(): Redis {
+  if (!g.__guesswhat_redis) {
+    g.__guesswhat_redis = new Redis(process.env.KV_REDIS_URL!, {
+      maxRetriesPerRequest: 2,
+      connectTimeout: 5000,
+      // Don't throw on connect errors — we log and degrade gracefully
+      lazyConnect: false,
+    });
+    g.__guesswhat_redis.on("error", (err) => {
+      console.error("[kv-store] Redis connection error:", err.message);
+    });
+  }
+  return g.__guesswhat_redis;
+}
+
+// In-memory store is ONLY used when Redis is NOT available (local dev).
+// When Redis IS available, it is the single source of truth for every read/write.
 if (!g.__guesswhat_kv_mem) g.__guesswhat_kv_mem = new Map<string, any>();
 const memoryStore = g.__guesswhat_kv_mem;
 
 export async function kvGet<T>(key: string): Promise<T | null> {
-  // Always check memory first (fastest, always consistent within same invocation)
-  const memValue = memoryStore.get(key);
-  if (memValue !== undefined) return memValue as T;
-
-  // Fall back to KV for cross-invocation persistence
   if (isKvEnabled) {
     try {
-      const kvValue = await kv.get<T>(key);
-      if (kvValue !== null && kvValue !== undefined) {
-        // Cache in memory for subsequent reads in this invocation
-        memoryStore.set(key, kvValue);
-        return kvValue;
-      }
-    } catch {
-      // KV read failed, return null
+      const raw = await getRedis().get(key);
+      if (raw === null) return null;
+      return JSON.parse(raw) as T;
+    } catch (err) {
+      console.error(`[kv-store] kvGet("${key}") failed:`, err);
+      return null;
     }
   }
 
-  return null;
+  const memValue = memoryStore.get(key);
+  return memValue !== undefined ? (memValue as T) : null;
 }
 
 export async function kvSet(key: string, value: any, ttlSec: number = 3 * 60 * 60): Promise<void> {
-  // Always write to memory for immediate consistency
-  memoryStore.set(key, value);
-
-  // Also persist to KV for cross-invocation durability
   if (isKvEnabled) {
     try {
-      await kv.set(key, value, { ex: ttlSec });
-    } catch {
-      // KV write failed silently - memory still has the data for this invocation
+      const serialized = JSON.stringify(value);
+      await getRedis().set(key, serialized, "EX", ttlSec);
+    } catch (err) {
+      console.error(`[kv-store] kvSet("${key}") failed:`, err);
     }
+    return;
   }
+
+  memoryStore.set(key, value);
 }
 
 export async function kvDelete(key: string): Promise<void> {
-  // Always delete from both
-  memoryStore.delete(key);
-
   if (isKvEnabled) {
     try {
-      await kv.del(key);
-    } catch {
-      // Ignore
+      await getRedis().del(key);
+    } catch (err) {
+      console.error(`[kv-store] kvDelete("${key}") failed:`, err);
     }
+    return;
   }
+
+  memoryStore.delete(key);
 }
 
 /**
- * Scan for keys matching a pattern. Only works with KV enabled.
- * Falls back to iterating memory store keys.
+ * Scan for keys matching a glob pattern (e.g. "room:*").
  */
 export async function kvKeys(pattern: string): Promise<string[]> {
   if (isKvEnabled) {
     try {
       const keys: string[] = [];
-      let cursor = 0;
-      // Use SCAN to iterate through keys matching the pattern
+      let cursor = "0";
       do {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const result: [number, string[]] = await kv.scan(cursor, { match: pattern, count: 100 }) as any;
-        cursor = result[0];
-        keys.push(...result[1].map(String));
-      } while (cursor !== 0);
+        const [nextCursor, batch] = await getRedis().scan(
+          cursor,
+          "MATCH",
+          pattern,
+          "COUNT",
+          100
+        );
+        cursor = nextCursor;
+        keys.push(...batch);
+      } while (cursor !== "0");
       return keys;
-    } catch {
-      // Fall through to memory scan
+    } catch (err) {
+      console.error(`[kv-store] kvKeys("${pattern}") failed:`, err);
+      return [];
     }
   }
 
-  // Memory fallback: filter keys by simple glob pattern (e.g. "room:*")
+  // Local dev fallback
   const prefix = pattern.replace("*", "");
   const keys: string[] = [];
   for (const key of memoryStore.keys()) {

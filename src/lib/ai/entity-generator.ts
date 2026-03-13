@@ -30,7 +30,7 @@ export async function generateEntities(
 Each entity must have:
 - "name": the entity's proper name
 - "acceptedAnswers": an array of 2-4 alternative valid names, casual names, last names, or partial names that a normal human might guess for this entity
-- "imageUrl": a direct URL to a real, high-quality image of this entity (e.g., from Wikimedia Commons). ONLY provide this if you are highly confident the URL is real and direct. Otherwise, omit this field.
+- "imageUrl": a direct URL to a real, publicly accessible image of this entity (e.g., from Wikimedia Commons, Wikipedia, or official sources). ONLY provide this if you are 100% certain the URL exists and is correct. If you are NOT sure, OMIT this field entirely — do NOT guess or fabricate URLs.
 - "description": a 1-2 sentence factual description (DO NOT include the name in the description)
 - "category": a sub-category within the topic
 - "year": relevant year if applicable, otherwise omit

@@ -2,7 +2,7 @@ import type { Entity, Difficulty, GameDataset } from "@/lib/types";
 import { generateId } from "@/lib/utils";
 import { generateEntities, rawEntityToEntity } from "./entity-generator";
 import { generateHints } from "./hint-generator";
-import { generateEntityImage } from "./image-pipeline";
+import { generateEntityImage, searchWikipediaImage } from "./image-pipeline";
 
 /**
  * Progress callback for tracking generation status
@@ -37,20 +37,33 @@ async function verifyImageUrl(url: string): Promise<boolean> {
 }
 
 /**
- * Generate a single entity's image and hints in parallel
+ * Generate a single entity's image and hints in parallel.
+ *
+ * Image strategy (3-tier, prioritizes real images):
+ * 1. LLM-provided URL (if the entity generator returned one and it's valid)
+ * 2. Wikipedia image search (free, works well for well-known subjects)
+ * 3. AI image generation via Gemini (fallback for obscure/custom subjects)
  */
 async function processEntity(
   apiKey: string,
   raw: { name: string; description: string; category: string; year?: string; acceptedAnswers: string[]; imageUrl?: string },
   difficulty: Difficulty
 ): Promise<Entity> {
-  // If the LLM successfully retrieved a real world image URL from its training data, skip generation to save cost
   const imagePromise = (async () => {
+    // Tier 1: Try LLM-provided URL
     if (raw.imageUrl && raw.imageUrl.startsWith("http")) {
       const isValid = await verifyImageUrl(raw.imageUrl);
       if (isValid) return raw.imageUrl;
     }
-    // Fallback to generating the image
+
+    // Tier 2: Search Wikipedia for a real image (free, no API key needed)
+    const wikiImage = await searchWikipediaImage(raw.name);
+    if (wikiImage) {
+      const isValid = await verifyImageUrl(wikiImage);
+      if (isValid) return wikiImage;
+    }
+
+    // Tier 3: Fall back to AI image generation
     return generateEntityImage(apiKey, raw.name, raw.description, raw.category);
   })();
 
