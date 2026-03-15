@@ -29,7 +29,7 @@ Play it at [lonelyguesswhat.vercel.app](https://lonelyguesswhat.vercel.app)
 - Spelling doesn't have to be perfect, close enough counts
 - Higher difficulty = harder subjects, less time, more points
 
-Demo Video : https://x.com/lonelyguyse1/status/2033208523212136483?s=20
+Demo Video : [X Video Demo](https://x.com/lonelyguyse1/status/2033208523212136483?s=20)
 
 ## Running Locally
 
