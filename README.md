@@ -19,15 +19,17 @@ Play it at [lonelyguesswhat.vercel.app](https://lonelyguesswhat.vercel.app)
 1. One player creates a room and shares the 6-letter code
 2. Other players join using the code
 3. Host starts the game when everyone's in
-4. Everyone guesses at the same time — scores update live
+4. Everyone guesses at the same time, scores update live
 5. Host advances to the next round
 
 ### Tips
 
 - You get 3 guesses per round and 3 hints that reveal gradually
 - Dashes below the image show how many words and letters the answer has
-- Spelling doesn't have to be perfect — close enough counts
+- Spelling doesn't have to be perfect, close enough counts
 - Higher difficulty = harder subjects, less time, more points
+
+Demo Video : https://x.com/lonelyguyse1/status/2033208523212136483?s=20
 
 ## Running Locally
 
